@@ -1,0 +1,51 @@
+# Gradle (Server)
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+
+# CMake (Client)
+client/build/
+client/CMakeFiles/
+client/CMakeCache.txt
+client/*.cmake
+client/Makefile
+
+# IDE files
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.DS_Store
+
+# Compiled files
+*.class
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Logs
+*.log
+logs/
+
+# Kotlin
+server/out/
+server/.kotlin/
+
+# C++
+client/Debug/
+client/Release/
+client/*.o
+client/*.d
+client/*.a
+client/*.lib
+client/*.dll
+client/*.so
+client/*.dylib
+
+# Binary files
+guildmaster_client 
