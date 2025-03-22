@@ -24,5 +24,12 @@ echo "UDP Port: $UDP_PORT"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$SCRIPT_DIR"
 
-# Run the server with the specified ports
-./gradlew run --args="-DtcpPort=$TCP_PORT -DudpPort=$UDP_PORT" 
+# Install the distribution if needed
+if [ ! -d "build/install/guildmaster-server" ]; then
+    echo "Installing the application..."
+    ./gradlew installDist
+fi
+
+# Run the application using the generated start script
+echo "Running the server..."
+build/install/guildmaster-server/bin/guildmaster-server -DtcpPort=$TCP_PORT -DudpPort=$UDP_PORT 
