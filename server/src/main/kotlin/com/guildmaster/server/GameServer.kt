@@ -31,7 +31,7 @@ class GameServer(
     private val sessionManager = SessionManager()
     
     // List of connected TCP clients
-    private val tcpClients = CopyOnWriteArrayList<TcpClientHandler>()
+    private val clients = CopyOnWriteArrayList<TcpClientHandler>()
     
     // Network channels
     private var tcpServerChannel: ServerSocketChannel? = null
@@ -113,7 +113,7 @@ class GameServer(
             logger.info { "New TCP connection from $clientAddress" }
             
             val clientHandler = TcpClientHandler(clientChannel, clientAddress, this)
-            tcpClients.add(clientHandler)
+            clients.add(clientHandler)
             
             // Process the client in a separate thread
             tcpExecutor.execute(clientHandler)
@@ -189,7 +189,7 @@ class GameServer(
             
             // Parse the registration message
             val regData = Protocol.json.decodeFromString<Protocol.UdpRegisterMessage>(jsonPart)
-            val playerId = regData.playerId
+            val playerId = regData.id
             
             // Find the session by player ID
             val session = sessionManager.getSessionById(playerId)
@@ -204,6 +204,30 @@ class GameServer(
             
             // Acknowledge registration
             sendUdpPacket(sender, "UDP_REGISTERED\n")
+            
+            // After UDP registration, make sure we send a new position update to the client
+            // This ensures they have their assigned position
+            val positionMessage = Protocol.PositionMessage(
+                playerId = session.id,
+                x = session.x,
+                y = session.y,
+                mapId = session.currentMapId
+            )
+            
+            val posMsg = Protocol.encodePositionMessage(positionMessage)
+            sendUdpPacket(sender, "$posMsg\n")
+            logger.debug { "Sent initial position after UDP registration: (${session.x}, ${session.y})" }
+            
+            // Also send a full player list update via TCP
+            sessionManager.getSessionByTcpAddress(session.tcpAddress!!)?.let { tcpSession ->
+                val tcpClient = clients.find { it.sessionId == tcpSession.id }
+                if (tcpClient != null) {
+                    val allPlayers = sessionManager.getSessionsInMap(session.currentMapId)
+                    val playersMessage = Protocol.createPlayersListMessage(allPlayers)
+                    tcpClient.sendMessage(playersMessage)
+                    logger.debug { "Sent updated player list to ${session.name} after UDP registration" }
+                }
+            }
         } catch (e: Exception) {
             logger.error(e) { "Error processing UDP registration from $sender" }
         }
@@ -481,7 +505,7 @@ class GameServer(
             )
             
             for (player in playersInMap) {
-                val playerClient = tcpClients.find { it.clientAddress == player.tcpAddress }
+                val playerClient = clients.find { it.clientAddress == player.tcpAddress }
                 playerClient?.sendMessage(chatMessage)
             }
             
@@ -522,7 +546,7 @@ class GameServer(
         
         // Send to all players on the map
         for (player in playersInMap) {
-            val playerClient = tcpClients.find { it.clientAddress == player.tcpAddress }
+            val playerClient = clients.find { it.clientAddress == player.tcpAddress }
             playerClient?.sendMessage(mapMessage)
         }
     }
@@ -534,7 +558,7 @@ class GameServer(
         val players = sessionManager.getAllSessions()
         val playersMessage = Protocol.createPlayersListMessage(players)
         
-        for (client in tcpClients) {
+        for (client in clients) {
             client.sendMessage(playersMessage)
         }
     }
@@ -543,7 +567,7 @@ class GameServer(
      * Called when a TCP client disconnects.
      */
     fun handleClientDisconnect(client: TcpClientHandler) {
-        tcpClients.remove(client)
+        clients.remove(client)
         
         val session = sessionManager.getSessionByTcpAddress(client.clientAddress)
         if (session != null) {
@@ -570,8 +594,8 @@ class GameServer(
         logger.info { "Shutting down server..." }
         
         // Close all TCP connections
-        tcpClients.forEach { it.close() }
-        tcpClients.clear()
+        clients.forEach { it.close() }
+        clients.clear()
         
         // Close network channels
         try { tcpServerChannel?.close() } catch (ignored: Exception) {}

@@ -21,9 +21,9 @@ data class PlayerSession(
     // Player appearance
     var color: String = randomColor(),
     
-    // Position in the world
-    var x: Float = 0f,
-    var y: Float = 0f,
+    // Position in the world - default to spawn area center
+    var x: Float = randomSpawnX(),
+    var y: Float = randomSpawnY(),
     
     // Current map
     var currentMapId: String = "default",
@@ -49,7 +49,9 @@ data class PlayerSession(
     constructor(id: String, name: String) : this(
         id = id,
         name = name,
-        color = randomColor()
+        color = randomColor(),
+        x = randomSpawnX(),
+        y = randomSpawnY()
     )
     
     companion object {
@@ -61,9 +63,24 @@ data class PlayerSession(
             "#FFFF00", "#FFD740", "#FFAB40", "#FF6E40"
         )
         
+        // Spawn area parameters
+        private const val SPAWN_CENTER_X = 400f
+        private const val SPAWN_CENTER_Y = 300f
+        private const val SPAWN_VARIANCE = 50f
+        
         // Generate a random color for the player
         private fun randomColor(): String {
             return PLAYER_COLORS[Random.nextInt(PLAYER_COLORS.size)]
+        }
+        
+        // Generate a random X coordinate for the spawn area
+        private fun randomSpawnX(): Float {
+            return SPAWN_CENTER_X + Random.nextFloat() * SPAWN_VARIANCE * 2 - SPAWN_VARIANCE
+        }
+        
+        // Generate a random Y coordinate for the spawn area
+        private fun randomSpawnY(): Float {
+            return SPAWN_CENTER_Y + Random.nextFloat() * SPAWN_VARIANCE * 2 - SPAWN_VARIANCE
         }
     }
     

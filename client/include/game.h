@@ -6,29 +6,9 @@
 #include <memory>
 #include <unordered_map>
 #include "network.h"
-
-// Constants
-#define MAX_CHAT_MESSAGES 10
-
-// Player representation in the game
-struct Player {
-    std::string id;
-    std::string name;
-    float x = 400.0f;
-    float y = 300.0f;
-    Color color = RED;
-    std::string mapId = "default";
-    
-    // Movement
-    float speed = 200.0f;
-    
-    // Visual
-    float radius = 20.0f;
-    
-    // State
-    bool isLocalPlayer = false;
-    bool isActive = true;
-};
+#include "ui_manager.h"
+#include "player_manager.h"
+#include "color_utils.h"
 
 // Game state enumeration
 enum class GameState {
@@ -73,18 +53,8 @@ private:
     void sendPlayerUpdate();
     void processPositionUpdate(const std::string& playerId, float x, float y);
     
-    // Player management
-    void updateLocalPlayer(float deltaTime);
-    void updatePlayers(const std::vector<PlayerInfo>& playerInfos);
-    void processPlayerInput();
-    
-    // Color selection
-    void drawColorSelector();
-    void handleColorSelection();
-    Color getColorFromIndex(int index);
-    std::string ColorToString(Color color);
-    Color parseColorString(const std::string& colorStr);
-    bool ColorEquals(Color a, Color b);
+    // Chat handling
+    void processChatInput();
     
     // Variables
     GameState state = GameState::INPUT_NAME;
@@ -102,30 +72,26 @@ private:
     char nameInput[32] = { 0 };
     int nameLength = 0;
     
-    // Player data
-    Player localPlayer;
-    std::unordered_map<std::string, Player> players;
-    
     // Synchronization
     float syncTimer = 0.0f;
-    float syncInterval = 0.05f; // 50ms
+    float syncInterval = 0.05f; // 50ms = 20 times per second
+    float correctionTimer = 0.0f;
+    float correctionInterval = 0.01f; // 10ms = 100 times per second
     
     // UI
-    Rectangle nameInputBox = { 0 };
+    std::unique_ptr<UIManager> uiManager;
     bool nameInputActive = false;
     
     // Color selection
-    const int NUM_COLORS = 8;
-    Color availableColors[8] = {
-        RED, GREEN, BLUE, YELLOW, PURPLE, ORANGE, PINK, SKYBLUE
-    };
     int selectedColorIndex = 0;
-    Rectangle colorButtons[8];
+    Rectangle colorButtons[ColorUtils::NUM_COLORS];
     
     // Chat
     std::vector<std::string> chatMessages;
     char chatInput[128] = { 0 };
     int chatInputLength = 0;
     bool chatInputActive = false;
-    Rectangle chatInputBox = { 0 };
+    
+    // Player management
+    std::unique_ptr<PlayerManager> playerManager;
 }; 

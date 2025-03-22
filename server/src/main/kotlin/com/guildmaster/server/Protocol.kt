@@ -77,10 +77,17 @@ object Protocol {
     data class MapChangeMessage(val mapId: String, val playerIds: List<String>)
     
     @Serializable
-    data class UdpRegisterMessage(val playerId: String)
+    data class UdpRegisterMessage(val id: String)
     
     @Serializable
-    data class PlayerInfo(val id: String, val name: String, val color: String)
+    data class PlayerInfo(
+        val id: String, 
+        val name: String, 
+        val color: String,
+        val x: Float = 0f,
+        val y: Float = 0f,
+        val mapId: String = "default"
+    )
     
     // Utility functions for encoding/decoding messages
     
@@ -110,7 +117,16 @@ object Protocol {
     
     // Function to create player list message
     fun createPlayersListMessage(players: List<PlayerSession>): String {
-        val playerInfos = players.map { PlayerInfo(it.id, it.name, it.color) }
+        val playerInfos = players.map { 
+            PlayerInfo(
+                id = it.id, 
+                name = it.name, 
+                color = it.color,
+                x = it.x,
+                y = it.y,
+                mapId = it.currentMapId
+            )
+        }
         return "$MSG_PLAYERS ${json.encodeToString(playerInfos)}"
     }
 } 

@@ -15,6 +15,9 @@ set(SOURCES
     src/main.cpp
     src/network.cpp
     src/game.cpp
+    src/ui_manager.cpp
+    src/player_manager.cpp
+    src/color_utils.cpp
 )
 
 # Add executable
