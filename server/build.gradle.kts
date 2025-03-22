@@ -16,7 +16,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
     
     // Serialization for data conversion
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
     
     // Logging
     implementation("ch.qos.logback:logback-classic:1.5.3")
@@ -25,6 +25,10 @@ dependencies {
     // Testing
     testImplementation("org.jetbrains.kotlin:kotlin-test")
     testImplementation("io.mockk:mockk:1.13.10")
+
+    implementation("com.typesafe:config:1.4.3")
+
+    implementation("org.joml:joml:1.10.5")
 }
 
 application {

@@ -1,108 +1,96 @@
 package com.guildmaster.server
 
-import com.guildmaster.server.network.Protocol
-import com.guildmaster.server.session.SessionManager
-import com.guildmaster.server.session.Response
 import com.guildmaster.server.cli.CommandHandler
+import com.guildmaster.server.cli.command.TcpCommand
+import com.guildmaster.server.config.SystemIdentity
+import com.guildmaster.server.network.Protocol
 import com.guildmaster.server.player.Player
-import kotlinx.coroutines.*
+import com.guildmaster.server.session.PlayerSession
+import com.guildmaster.server.session.Response
+import com.guildmaster.server.session.SessionManager
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import mu.KotlinLogging
-import java.net.*
+import java.net.InetSocketAddress
 import java.nio.ByteBuffer
 import java.nio.channels.DatagramChannel
 import java.nio.channels.ServerSocketChannel
 import java.nio.channels.SocketChannel
-import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
-import kotlin.concurrent.thread
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import java.nio.channels.SelectionKey
-import java.nio.channels.Selector
-import java.util.concurrent.ExecutorService
 import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
+
+private const val BUFFER_SIZE = 1024
+private const val CONFIG_DELAY_MS = 100L
 
 /**
- * Main game server, responsible for managing TCP and UDP connections.
+ * Main server class that handles all network communication and game state.
  */
 class GameServer(
-    private val tcpPort: Int = 9999,
-    private val udpPort: Int = 9998
+    private val tcpPort: Int,
+    private val udpPort: Int
 ) {
     private val logger = KotlinLogging.logger {}
     
-    // Session manager
-    private val sessionManager = SessionManager()
+    val sessionManager = SessionManager()
+    private val systemIdentity = SystemIdentity()
     
-    // List of connected TCP clients
-    private val clients = CopyOnWriteArrayList<TcpClientHandler>()
+    private var isRunning = false
+    private lateinit var tcpServerChannel: ServerSocketChannel
+    private lateinit var udpChannel: DatagramChannel
+    val clients = mutableListOf<TcpClientHandler>()
     
-    // Command handler
-    private val commandHandler = CommandHandler(this)
-    
-    // Network channels
-    private var tcpServerChannel: ServerSocketChannel? = null
-    private var udpChannel: DatagramChannel? = null
-    
-    // Thread pools
     private val tcpExecutor = Executors.newCachedThreadPool()
     private val udpExecutor = Executors.newSingleThreadExecutor()
     
-    // Control flags
-    @Volatile
-    private var isRunning = false
+    private lateinit var commandHandler: CommandHandler
+    private lateinit var tcpCommand: TcpCommand
     
     /**
      * Start the server.
      */
     fun start() {
-        if (isRunning) {
-            logger.warn { "Server is already running." }
-            return
-        }
+        if (isRunning) return
         
         try {
-            // Initialize TCP server
-            tcpServerChannel = ServerSocketChannel.open().apply {
-                socket().bind(InetSocketAddress(tcpPort))
-                configureBlocking(true)
-            }
-            
-            // Initialize UDP server
-            udpChannel = DatagramChannel.open().apply {
-                socket().bind(InetSocketAddress(udpPort))
-                configureBlocking(true)
-            }
-            
+            systemIdentity.loadOrGenerateConfig()
+            initializeNetworkChannels()
             isRunning = true
-            logger.info { "Server started - TCP on port $tcpPort, UDP on port $udpPort" }
+            logger.info { "Server started on TCP port $tcpPort and UDP port $udpPort" }
             
-            // Start processing TCP connections
-            startTcpListener()
-            
-            // Start processing UDP packets
-            startUdpListener()
-            
-            // Start command handler
+            commandHandler = CommandHandler(this)
+            tcpCommand = TcpCommand(this)
             commandHandler.start()
             
+            startUdpListener()
+            startTcpListener()
         } catch (e: Exception) {
-            logger.error(e) { "Error starting server" }
+            logger.error(e) { "Failed to start server" }
             stop()
+            throw e
         }
     }
     
-    /**
-     * Start the TCP listener to accept new connections.
-     */
+    private fun initializeNetworkChannels() {
+        tcpServerChannel = ServerSocketChannel.open().apply {
+            configureBlocking(true)
+            socket().bind(InetSocketAddress(tcpPort))
+        }
+        
+        udpChannel = DatagramChannel.open().apply {
+            configureBlocking(true)
+            socket().bind(InetSocketAddress(udpPort))
+        }
+    }
+    
     private fun startTcpListener() {
         thread(name = "tcp-listener") {
             try {
                 logger.info { "TCP listener started, waiting for connections..." }
                 
                 while (isRunning) {
-                    val clientChannel = tcpServerChannel?.accept() ?: continue
+                    val clientChannel = tcpServerChannel.accept()
                     handleNewTcpConnection(clientChannel)
                 }
             } catch (e: Exception) {
@@ -113,9 +101,6 @@ class GameServer(
         }
     }
     
-    /**
-     * Process a new TCP connection.
-     */
     private fun handleNewTcpConnection(clientChannel: SocketChannel) {
         try {
             clientChannel.configureBlocking(true)
@@ -125,8 +110,6 @@ class GameServer(
             
             val clientHandler = TcpClientHandler(clientChannel, clientAddress, this)
             clients.add(clientHandler)
-            
-            // Process the client in a separate thread
             tcpExecutor.execute(clientHandler)
             
         } catch (e: Exception) {
@@ -135,19 +118,16 @@ class GameServer(
         }
     }
     
-    /**
-     * Start the UDP listener to receive packets.
-     */
     private fun startUdpListener() {
         udpExecutor.execute {
             try {
                 logger.info { "UDP listener started, waiting for packets..." }
                 
-                val buffer = ByteBuffer.allocate(1024)
+                val buffer = ByteBuffer.allocate(BUFFER_SIZE)
                 
                 while (isRunning) {
                     buffer.clear()
-                    val sender = udpChannel?.receive(buffer) as? InetSocketAddress ?: continue
+                    val sender = udpChannel.receive(buffer) as? InetSocketAddress ?: continue
                     
                     buffer.flip()
                     val bytes = ByteArray(buffer.remaining())
@@ -162,33 +142,24 @@ class GameServer(
             }
         }
     }
-    
-    /**
-     * Process a received UDP packet.
-     */
+
     private fun handleUdpPacket(sender: InetSocketAddress, data: ByteArray) {
         try {
             val message = String(data).trim()
             
             logger.debug { "UDP packet received from $sender: $message" }
             
-            if (message.startsWith(Protocol.CMD_POS)) {
-                handlePositionUpdate(sender, message)
-            } else if (message.startsWith(Protocol.CMD_ACTION)) {
-                handleActionPacket(sender, message)
-            } else if (message.startsWith(Protocol.CMD_PING)) {
-                sendUdpPacket(sender, "${Protocol.MSG_PONG}\n")
-            } else if (message.startsWith(Protocol.CMD_UDP_REGISTER)) {
-                handleUdpRegistration(sender, message)
+            when {
+                message.startsWith(Protocol.CMD_POS) -> handlePositionUpdate(sender, message)
+                message.startsWith(Protocol.CMD_ACTION) -> handleActionPacket(sender, message)
+                message.startsWith(Protocol.CMD_PING) -> sendUdpPacket(sender, "${Protocol.MSG_PONG}\n")
+                message.startsWith(Protocol.CMD_UDP_REGISTER) -> handleUdpRegistration(sender, message)
             }
         } catch (e: Exception) {
             logger.error(e) { "Error processing UDP packet from $sender" }
         }
     }
     
-    /**
-     * Handle UDP registration to associate UDP address with TCP session
-     */
     private fun handleUdpRegistration(sender: InetSocketAddress, message: String) {
         try {
             val jsonPart = message.substringAfter(" ", "")
@@ -216,36 +187,8 @@ class GameServer(
                             logger.info { "UDP address $sender registered for player ${session.player.name} (${session.player.id})" }
                             sendUdpPacket(sender, "UDP_REGISTERED\n")
                             
-                            val positionMessage = Protocol.PositionMessage(
-                                playerId = session.player.id,
-                                x = session.player.x,
-                                y = session.player.y,
-                                mapId = session.player.currentMapId
-                            )
-                            
-                            val posMsg = Protocol.encodePositionMessage(positionMessage)
-                            sendUdpPacket(sender, "$posMsg\n")
-                            logger.debug { "Sent initial position after UDP registration: (${session.player.x}, ${session.player.y})" }
-                            
-                            session.tcpAddress?.let { tcpAddr ->
-                                when (val tcpSessionResult = sessionManager.getSessionByTcpAddress(tcpAddr)) {
-                                    is Response.Error -> logger.warn { "TCP session not found: ${tcpSessionResult.message}" }
-                                    is Response.Success -> {
-                                        val tcpSession = tcpSessionResult.data
-                                        val tcpClient = clients.find { it.sessionId == tcpSession.player.id }
-                                        tcpClient?.let { client ->
-                                            when (val mapSessionsResult = sessionManager.getSessionsInMap(session.player.currentMapId)) {
-                                                is Response.Error -> logger.warn { "Failed to get map sessions: ${mapSessionsResult.message}" }
-                                                is Response.Success -> {
-                                                    val playersMessage = Protocol.createPlayersListMessage(mapSessionsResult.data)
-                                                    client.sendMessage(playersMessage)
-                                                    logger.debug { "Sent updated player list to ${session.player.name} after UDP registration" }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                            sendInitialPosition(sender, session)
+                            notifyTcpClient(session)
                         }
                     }
                 }
@@ -255,11 +198,47 @@ class GameServer(
         }
     }
     
-    /**
-     * Process a position update via UDP.
-     */
+    private fun sendInitialPosition(sender: InetSocketAddress, session: PlayerSession) {
+        val positionMessage = Protocol.PositionMessage(
+            playerId = session.player.id,
+            x = session.player.position.x,
+            y = session.player.position.y,
+            mapId = session.player.currentMapId
+        )
+        val posMsg = Protocol.encodePositionMessage(positionMessage)
+        sendUdpPacket(sender, "$posMsg\n")
+        logger.debug { "Sent initial position after UDP registration: (${session.player.position.x}, ${session.player.position.y})" }
+    }
+    
+    private fun notifyTcpClient(session: PlayerSession) {
+        session.tcpAddress?.let { tcpAddr ->
+            when (val tcpSessionResult = sessionManager.getSessionByTcpAddress(tcpAddr)) {
+                is Response.Error -> logger.warn { "TCP session not found: ${tcpSessionResult.message}" }
+                is Response.Success -> {
+                    val tcpSession = tcpSessionResult.data
+                    val tcpClient = clients.find { it.sessionId == tcpSession.player.id }
+                    tcpClient?.let { client ->
+                        when (val mapSessionsResult = sessionManager.getSessionsInMap(session.player.currentMapId)) {
+                            is Response.Error -> logger.warn { "Failed to get map sessions: ${mapSessionsResult.message}" }
+                            is Response.Success -> {
+                                val playersMessage = Protocol.createPlayersListMessage(mapSessionsResult.data)
+                                client.sendMessage(playersMessage)
+                                logger.debug { "Sent updated player list to ${session.player.name} after UDP registration" }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
     private fun handlePositionUpdate(sender: InetSocketAddress, positionMessage: String) {
         try {
+            val jsonPart = positionMessage.substringAfter(" ", "")
+            if (jsonPart.isBlank()) return
+            
+            val positionData = Protocol.json.decodeFromString<Protocol.PositionMessage>(jsonPart)
+            
             when (val sessionResult = sessionManager.getSessionByUdpAddress(sender)) {
                 is Response.Error -> {
                     logger.warn { "Session not found for UDP address $sender: ${sessionResult.message}" }
@@ -267,41 +246,38 @@ class GameServer(
                 }
                 is Response.Success -> {
                     val session = sessionResult.data
-                    val jsonPart = positionMessage.substringAfter(" ", "")
-                    if (jsonPart.isBlank()) return
                     
-                    val posData = Protocol.json.decodeFromString<Protocol.PositionMessage>(jsonPart)
+                    if (positionData.playerId != session.player.id) {
+                        logger.warn { "Invalid player ID in position update from $sender" }
+                        return
+                    }
                     
-                    when (val updateResult = sessionManager.updatePosition(session.player.id, posData.x, posData.y)) {
+                    session.updatePosition(positionData.x, positionData.y)
+                    
+                    when (val mapSessionsResult = sessionManager.getSessionsInMap(session.player.currentMapId)) {
                         is Response.Error -> {
-                            logger.error { "Failed to update position: ${updateResult.message}" }
+                            logger.warn { "Failed to get map sessions: ${mapSessionsResult.message}" }
                             return
                         }
                         is Response.Success -> {
-                            when (val mapSessionsResult = sessionManager.getSessionsInMap(session.player.currentMapId)) {
-                                is Response.Error -> logger.warn { "Failed to get map sessions: ${mapSessionsResult.message}" }
-                                is Response.Success -> {
-                                    for (otherPlayer in mapSessionsResult.data) {
-                                        if (otherPlayer.player.id != session.player.id && otherPlayer.udpAddress != null) {
-                                            sendUdpPacket(otherPlayer.udpAddress!!, positionMessage + "\n")
-                                        }
-                                    }
-                                }
-                            }
+                            val playersMessage = Protocol.createPlayersListMessage(mapSessionsResult.data)
+                            broadcastToMap(session.player.currentMapId, playersMessage)
                         }
                     }
                 }
             }
         } catch (e: Exception) {
-            logger.error(e) { "Error processing UDP position update" }
+            logger.error(e) { "Error processing position update from $sender" }
         }
     }
     
-    /**
-     * Process a player action via UDP.
-     */
     private fun handleActionPacket(sender: InetSocketAddress, actionMessage: String) {
         try {
+            val jsonPart = actionMessage.substringAfter(" ", "")
+            if (jsonPart.isBlank()) return
+            
+            val actionData = Protocol.json.decodeFromString<Protocol.ActionMessage>(jsonPart)
+            
             when (val sessionResult = sessionManager.getSessionByUdpAddress(sender)) {
                 is Response.Error -> {
                     logger.warn { "Session not found for UDP address $sender: ${sessionResult.message}" }
@@ -309,65 +285,64 @@ class GameServer(
                 }
                 is Response.Success -> {
                     val session = sessionResult.data
-                    when (val playersResult = sessionManager.getSessionsInMap(session.player.currentMapId)) {
+                    
+                    if (actionData.playerId != session.player.id) {
+                        logger.warn { "Invalid player ID in action packet from $sender" }
+                        return
+                    }
+                    
+                    when (val mapSessionsResult = sessionManager.getSessionsInMap(session.player.currentMapId)) {
                         is Response.Error -> {
-                            logger.error { "Failed to get players in map: ${playersResult.message}" }
+                            logger.warn { "Failed to get map sessions: ${mapSessionsResult.message}" }
                             return
                         }
                         is Response.Success -> {
-                            for (otherPlayer in playersResult.data) {
-                                if (otherPlayer.player.id != session.player.id && otherPlayer.udpAddress != null) {
-                                    sendUdpPacket(otherPlayer.udpAddress!!, actionMessage + "\n")
-                                }
-                            }
+                            val actionMessage = Protocol.encodeActionMessage(actionData)
+                            broadcastToMap(session.player.currentMapId, actionMessage)
                         }
                     }
                 }
             }
         } catch (e: Exception) {
-            logger.error(e) { "Error processing UDP action" }
+            logger.error(e) { "Error processing action packet from $sender" }
         }
     }
     
-    /**
-     * Send a UDP packet to a client.
-     */
+    private fun broadcastToMap(mapId: String, message: String) {
+        when (val mapSessionsResult = sessionManager.getSessionsInMap(mapId)) {
+            is Response.Error -> {
+                logger.warn { "Failed to get map sessions: ${mapSessionsResult.message}" }
+                return
+            }
+            is Response.Success -> {
+                mapSessionsResult.data.forEach { session ->
+                    session.udpAddress?.let { sendUdpPacket(it, "$message\n") }
+                }
+            }
+        }
+    }
+    
     fun sendUdpPacket(target: InetSocketAddress, message: String) {
         try {
             val buffer = ByteBuffer.wrap(message.toByteArray())
-            udpChannel?.send(buffer, target)
+            udpChannel.send(buffer, target)
         } catch (e: Exception) {
             logger.error(e) { "Error sending UDP packet to $target" }
         }
     }
     
-    /**
-     * Process TCP commands from clients
-     */
     fun handleTcpCommand(client: TcpClientHandler, command: String) {
         logger.debug { "Processing TCP command: $command from ${client.clientAddress}" }
         
         try {
-            when {
-                command.startsWith(Protocol.CMD_CONNECT) -> {
-                    handleConnectCommand(client, command)
-                }
-                command.startsWith(Protocol.CMD_CONFIG) -> {
-                    handleConfigCommand(client, command)
-                }
-                command.startsWith(Protocol.CMD_MAP) -> {
-                    handleMapCommand(client, command)
-                }
-                command.startsWith(Protocol.CMD_CHAT) -> {
-                    handleChatCommand(client, command)
-                }
-                command.startsWith(Protocol.CMD_PING) -> {
-                    handlePingCommand(client, command)
-                }
-                else -> {
-                    logger.warn { "Unknown TCP command: $command" }
-                    client.sendMessage("ERROR Unknown command")
-                }
+            val context = CommandContext(
+                source = CommandSource.Session(client),
+                arguments = listOf(command),
+                rawInput = command
+            )
+            
+            if (!tcpCommand.execute(context)) {
+                logger.warn { "Failed to execute TCP command: $command" }
             }
         } catch (e: Exception) {
             logger.error(e) { "Error processing command: $command" }
@@ -375,220 +350,6 @@ class GameServer(
         }
     }
     
-    /**
-     * Process the CONNECT command.
-     */
-    private fun handleConnectCommand(client: TcpClientHandler, command: String) {
-        try {
-            val jsonPart = command.substringAfter(" ", "")
-            if (jsonPart.isBlank()) {
-                logger.warn { "Invalid connect command format from ${client.clientAddress}" }
-                client.sendMessage("ERROR Invalid connect command format")
-                return
-            }
-            
-            val connectMsg = Protocol.json.decodeFromString<Protocol.ConnectMessage>(jsonPart)
-            val playerName = connectMsg.name
-            val playerColor = connectMsg.color
-            
-            logger.debug { "Connect request from ${client.clientAddress} with name: $playerName, color: $playerColor" }
-            
-            when (val sessionResult = sessionManager.createSession(playerName, playerColor)) {
-                is Response.Error -> {
-                    logger.warn { "Failed to create session: ${sessionResult.message}" }
-                    client.sendMessage("ERROR ${sessionResult.message}")
-                    return
-                }
-                is Response.Success -> {
-                    val session = sessionResult.data
-                    client.sessionId = session.player.id
-                    session.tcpAddress = client.clientAddress
-                    
-                    when (val tcpResult = sessionManager.associateTcpAddress(client.clientAddress, session.player.id)) {
-                        is Response.Error -> {
-                            logger.error { "Failed to associate TCP address: ${tcpResult.message}" }
-                            client.sendMessage("ERROR Failed to complete connection")
-                            return
-                        }
-                        is Response.Success -> {
-                            logger.info { "Player connected: $playerName (${session.player.id}) with color $playerColor" }
-                            
-                            val configMessage = Protocol.ConfigMessage(
-                                id = session.player.id,
-                                udpPort = udpPort,
-                                color = session.player.color,
-                                mapId = session.player.currentMapId
-                            )
-                            val configMsg = Protocol.encodeConfigMessage(configMessage)
-                            logger.debug { "Sending config message to client: $configMsg" }
-                            client.sendMessage(configMsg)
-                            
-                            GlobalScope.launch {
-                                delay(100)
-                                broadcastPlayersList()
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            logger.error(e) { "Error processing connect command from ${client.clientAddress}" }
-            client.sendMessage("ERROR Internal server error during connection")
-        }
-    }
-    
-    /**
-     * Process the CONFIG command.
-     */
-    private fun handleConfigCommand(client: TcpClientHandler, command: String) {
-        try {
-            when (val sessionResult = sessionManager.getSessionByTcpAddress(client.clientAddress)) {
-                is Response.Error -> {
-                    client.sendMessage("ERROR Session not found")
-                    return
-                }
-                is Response.Success -> {
-                    val session = sessionResult.data
-                    val jsonPart = command.substringAfter(" ", "")
-                    if (jsonPart.isBlank()) return
-                    
-                    val configData = Protocol.json.decodeFromString<Protocol.ConfigMessage>(jsonPart)
-                    
-                    if (configData.id != session.player.id) {
-                        client.sendMessage("ERROR Invalid player ID")
-                        return
-                    }
-                    
-                    if (configData.color?.isNotBlank() == true) {
-                        session.player.color = configData.color
-                    }
-                    
-                    if (configData.mapId?.isNotBlank() == true && configData.mapId != session.player.currentMapId) {
-                        when (val mapResult = sessionManager.updateMap(session.player.id, configData.mapId)) {
-                            is Response.Error -> {
-                                client.sendMessage("ERROR ${mapResult.message}")
-                                return
-                            }
-                            is Response.Success -> {}
-                        }
-                    }
-                    
-                    client.sendMessage("CONFIG_OK")
-                    logger.debug { "Configuration updated for ${session.player.name}" }
-                }
-            }
-        } catch (e: Exception) {
-            logger.error(e) { "Error processing CONFIG command" }
-            client.sendMessage("ERROR Failed to configure")
-        }
-    }
-    
-    /**
-     * Process the MAP command.
-     */
-    private fun handleMapCommand(client: TcpClientHandler, command: String) {
-        try {
-            when (val sessionResult = sessionManager.getSessionByTcpAddress(client.clientAddress)) {
-                is Response.Error -> {
-                    client.sendMessage("ERROR Session not found")
-                    return
-                }
-                is Response.Success -> {
-                    val session = sessionResult.data
-                    val jsonPart = command.substringAfter(" ", "")
-                    if (jsonPart.isBlank()) return
-                    
-                    val mapData = Protocol.json.decodeFromString<Protocol.MapChangeMessage>(jsonPart)
-                    
-                    val oldMapId = session.player.currentMapId
-                    when (val mapResult = sessionManager.updateMap(session.player.id, mapData.mapId)) {
-                        is Response.Error -> {
-                            client.sendMessage("ERROR ${mapResult.message}")
-                            return
-                        }
-                        is Response.Success -> {
-                            notifyMapChange(oldMapId)
-                            notifyMapChange(mapData.mapId)
-                            logger.info { "Player ${session.player.name} changed from map $oldMapId to ${mapData.mapId}" }
-                        }
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            logger.error(e) { "Error processing MAP command" }
-            client.sendMessage("ERROR Failed to change map")
-        }
-    }
-    
-    /**
-     * Process the CHAT command.
-     */
-    private fun handleChatCommand(client: TcpClientHandler, command: String) {
-        try {
-            when (val sessionResult = sessionManager.getSessionByTcpAddress(client.clientAddress)) {
-                is Response.Error -> {
-                    client.sendMessage("ERROR Session not found")
-                    return
-                }
-                is Response.Success -> {
-                    val session = sessionResult.data
-                    val jsonPart = command.substringAfter(" ", "")
-                    if (jsonPart.isBlank()) return
-                    
-                    val chatData = Protocol.json.decodeFromString<Protocol.ChatMessage>(jsonPart)
-                    
-                    if (chatData.playerId != session.player.id) {
-                        client.sendMessage("ERROR Invalid player ID")
-                        return
-                    }
-                    
-                    when (val playersResult = sessionManager.getSessionsInMap(session.player.currentMapId)) {
-                        is Response.Error -> {
-                            logger.error { "Failed to get players in map: ${playersResult.message}" }
-                            client.sendMessage("ERROR Failed to send message")
-                            return
-                        }
-                        is Response.Success -> {
-                            val chatMessage = Protocol.encodeChatMessage(
-                                Protocol.ChatMessage(
-                                    playerId = session.player.id,
-                                    playerName = session.player.name,
-                                    text = chatData.text
-                                )
-                            )
-                            
-                            for (player in playersResult.data) {
-                                val playerClient = clients.find { it.clientAddress == player.tcpAddress }
-                                playerClient?.sendMessage(chatMessage)
-                            }
-                            
-                            logger.debug { "Chat message from ${session.player.name}: ${chatData.text}" }
-                        }
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            logger.error(e) { "Error processing CHAT command" }
-            client.sendMessage("ERROR Failed to send message")
-        }
-    }
-    
-    /**
-     * Process the PING command.
-     */
-    private fun handlePingCommand(client: TcpClientHandler, command: String) {
-        try {
-            // Send PONG response - used for connection keepalive
-            client.sendMessage(Protocol.MSG_PONG)
-        } catch (e: Exception) {
-            logger.error(e) { "Error processing PING command" }
-            client.sendMessage("ERROR Failed to respond to PING")
-        }
-    }
-    
-    /**
-     * Notify players on a map about changes.
-     */
     private fun notifyMapChange(mapId: String) {
         when (val playersResult = sessionManager.getSessionsInMap(mapId)) {
             is Response.Error -> {
@@ -603,7 +364,7 @@ class GameServer(
                     )
                 )
                 
-                for (player in playersResult.data) {
+                playersResult.data.forEach { player ->
                     val playerClient = clients.find { it.clientAddress == player.tcpAddress }
                     playerClient?.sendMessage(mapMessage)
                 }
@@ -611,24 +372,19 @@ class GameServer(
         }
     }
     
-    /**
-     * Send the player list to all connected clients.
-     */
     fun broadcastPlayersList() {
-        when (val playersResult = sessionManager.getAllSessions()) {
-            is Response.Error -> logger.error { "Failed to get all sessions: ${playersResult.message}" }
+        when (val playersResult = sessionManager.getAllPlayers()) {
+            is Response.Error -> {
+                logger.error { "Failed to get players list: ${playersResult.message}" }
+                return
+            }
             is Response.Success -> {
-                val playersMessage = Protocol.createPlayersListMessage(playersResult.data)
-                for (client in clients) {
-                    client.sendMessage(playersMessage)
-                }
+                val playersMessage = Protocol.createPlayersListMessage(playersResult.data.map { it.id })
+                clients.forEach { it.sendMessage(playersMessage) }
             }
         }
     }
     
-    /**
-     * Called when a TCP client disconnects.
-     */
     fun handleClientDisconnect(client: TcpClientHandler) {
         clients.remove(client)
         
@@ -653,49 +409,58 @@ class GameServer(
         }
     }
     
-    /**
-     * Stop the server.
-     */
     fun stop() {
         if (!isRunning) return
         
         isRunning = false
-        logger.info { "Shutting down server..." }
+        logger.info { "Stopping server..." }
         
-        // Close all TCP connections
-        clients.forEach { it.close() }
-        clients.clear()
-        
-        // Close network channels
-        try { tcpServerChannel?.close() } catch (ignored: Exception) {}
-        try { udpChannel?.close() } catch (ignored: Exception) {}
-        
-        // Shutdown executors
-        tcpExecutor.shutdown()
-        udpExecutor.shutdown()
-        
-        // Shutdown session manager
-        sessionManager.shutdown()
-        
-        logger.info { "Server shutdown complete" }
+        try {
+            tcpServerChannel.close()
+            udpChannel.close()
+            tcpExecutor.shutdown()
+            udpExecutor.shutdown()
+            
+            if (!tcpExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                tcpExecutor.shutdownNow()
+            }
+            if (!udpExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                udpExecutor.shutdownNow()
+            }
+            
+            clients.forEach { it.stop() }
+            clients.clear()
+            
+            logger.info { "Server stopped" }
+        } catch (e: Exception) {
+            logger.error(e) { "Error stopping server" }
+        }
     }
-
-    /**
-     * Get a list of all connected players
-     */
-    fun getConnectedPlayers(): Response<List<Player>> = sessionManager.getConnectedPlayers()
+    
+    fun getConnectedPlayers(): Response<List<Player>> {
+        return sessionManager.getAllPlayers()
+    }
+    
+    fun broadcastSystemMessage(message: String) {
+        val chatMessage = Protocol.encodeChatMessage(
+            Protocol.ChatMessage(
+                playerId = "system",
+                playerName = "System",
+                text = message
+            )
+        )
+        
+        clients.forEach { it.sendMessage(chatMessage) }
+    }
 }
 
-/**
- * Handler for TCP clients.
- */
 class TcpClientHandler(
     private val clientChannel: SocketChannel,
     val clientAddress: InetSocketAddress,
     private val server: GameServer
 ) : Runnable {
     private val logger = KotlinLogging.logger {}
-    private val buffer = ByteBuffer.allocate(1024)
+    private val buffer = ByteBuffer.allocate(BUFFER_SIZE)
     private val incomingData = StringBuilder()
     
     @Volatile
@@ -731,13 +496,9 @@ class TcpClientHandler(
         }
     }
     
-    /**
-     * Process received data, splitting by lines.
-     */
     private fun processIncomingData(data: String) {
         incomingData.append(data)
         
-        // Process complete lines
         var newlinePos: Int
         while (incomingData.indexOf('\n').also { newlinePos = it } != -1) {
             val line = incomingData.substring(0, newlinePos).trim()
@@ -749,9 +510,6 @@ class TcpClientHandler(
         }
     }
     
-    /**
-     * Send a message to the client.
-     */
     fun sendMessage(message: String) {
         try {
             if (!clientChannel.isOpen) return

@@ -1,35 +1,26 @@
 package com.guildmaster.server.session
 
 import com.guildmaster.server.player.Player
-import kotlinx.serialization.Serializable
 import java.net.InetSocketAddress
-import java.util.*
+import org.joml.Vector2f
 
 /**
  * Represents a connected player session on the server.
  * Stores all relevant information about the player during the session.
  */
-@Serializable
 data class PlayerSession(
     // Player information
     val player: Player,
     
     // Connection metadata (not serialized)
-    @kotlinx.serialization.Transient
     var tcpAddress: InetSocketAddress? = null,
     
-    @kotlinx.serialization.Transient
     var udpAddress: InetSocketAddress? = null,
     
     // Session status and timestamps
-    @kotlinx.serialization.Transient
-    var isActive: Boolean = true,
+    private var lastTcpActivity: Long = System.currentTimeMillis(),
     
-    @kotlinx.serialization.Transient
-    var lastTcpActivity: Long = System.currentTimeMillis(),
-    
-    @kotlinx.serialization.Transient
-    var lastUdpActivity: Long = System.currentTimeMillis()
+    private var lastUdpActivity: Long = System.currentTimeMillis()
 ) {
     // Constructor for simplified session creation
     constructor(id: String, name: String, color: String) : this(
@@ -53,17 +44,15 @@ data class PlayerSession(
     /**
      * Update the player's position
      */
-    fun updatePosition(newX: Float, newY: Float) {
-        player.updatePosition(newX, newY)
+    fun updatePosition(x: Float, y: Float) {
+        player.position = Vector2f(x, y)
         updateUdpActivity()
     }
     
     /**
      * Convert the session to a simplified representation for sending to the client
      */
-    fun toClientView(): Map<String, Any> {
-        return player.toClientView()
-    }
+    fun toClientView(): Map<String, Any> = player.toClientView()
     
     /**
      * Check if the session has been inactive for too long

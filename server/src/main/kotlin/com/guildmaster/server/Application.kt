@@ -5,28 +5,25 @@ import kotlin.concurrent.thread
 
 private val logger = KotlinLogging.logger {}
 
+private const val DEFAULT_TCP_PORT = 9999
+private const val DEFAULT_UDP_PORT = 9998
+private const val SHUTDOWN_CHECK_INTERVAL = 1000L
+
 /**
  * Main entry point for the Guild Master server application.
  */
 fun main(args: Array<String>) {
     logger.info { "Starting Guild Master server..." }
     
-    // Parse command line arguments
-    var tcpPort = 9999
-    var udpPort = 9998
-    
-    // Check for system properties passed via command line
-    System.getProperty("tcpPort")?.toIntOrNull()?.let { tcpPort = it }
-    System.getProperty("udpPort")?.toIntOrNull()?.let { udpPort = it }
+    val tcpPort = System.getProperty("tcpPort")?.toIntOrNull() ?: DEFAULT_TCP_PORT
+    val udpPort = System.getProperty("udpPort")?.toIntOrNull() ?: DEFAULT_UDP_PORT
     
     logger.info { "Using TCP port: $tcpPort" }
     logger.info { "Using UDP port: $udpPort" }
     
-    // Create and start the server
     val server = GameServer(tcpPort, udpPort)
     server.start()
     
-    // Register shutdown hook to stop the server when the program terminates
     Runtime.getRuntime().addShutdownHook(thread(start = false) {
         logger.info { "Shutting down server..." }
         server.stop()
@@ -35,13 +32,12 @@ fun main(args: Array<String>) {
     logger.info { "Server started successfully" }
     logger.info { "Press Ctrl+C to stop the server" }
     
-    // Keep the program running
     try {
         while (true) {
-            Thread.sleep(1000)
+            Thread.sleep(SHUTDOWN_CHECK_INTERVAL)
         }
     } catch (e: InterruptedException) {
-        // Interrupted, shutting down
+        // Normal shutdown
     } finally {
         server.stop()
     }

@@ -84,44 +84,36 @@ object Protocol {
         val mapId: String = "default"
     ) {
         companion object {
-            fun fromPlayer(player: Player): PlayerInfo {
-                return PlayerInfo(
-                    id = player.id,
-                    name = player.name,
-                    color = player.color,
-                    x = player.x,
-                    y = player.y,
-                    mapId = player.currentMapId
-                )
-            }
+            fun fromPlayer(player: Player): PlayerInfo = PlayerInfo(
+                id = player.id,
+                name = player.name,
+                color = player.color,
+                x = player.position.x,
+                y = player.position.y,
+                mapId = player.currentMapId
+            )
         }
     }
     
     // Utility functions for encoding/decoding messages
     
-    fun encodeConnectMessage(message: ConnectMessage): String {
-        return "$CMD_CONNECT ${json.encodeToString(ConnectMessage.serializer(), message)}"
-    }
+    fun encodeConnectMessage(message: ConnectMessage): String =
+        "$CMD_CONNECT ${json.encodeToString(ConnectMessage.serializer(), message)}"
     
-    fun encodeConfigMessage(message: ConfigMessage): String {
-        return "$MSG_CONFIG ${json.encodeToString(ConfigMessage.serializer(), message)}"
-    }
+    fun encodeConfigMessage(message: ConfigMessage): String =
+        "$MSG_CONFIG ${json.encodeToString(ConfigMessage.serializer(), message)}"
     
-    fun encodePositionMessage(message: PositionMessage): String {
-        return "$MSG_POS ${json.encodeToString(PositionMessage.serializer(), message)}"
-    }
+    fun encodePositionMessage(message: PositionMessage): String =
+        "$MSG_POS ${json.encodeToString(PositionMessage.serializer(), message)}"
     
-    fun encodeActionMessage(message: ActionMessage): String {
-        return "$CMD_ACTION ${json.encodeToString(ActionMessage.serializer(), message)}"
-    }
+    fun encodeActionMessage(message: ActionMessage): String =
+        "$CMD_ACTION ${json.encodeToString(ActionMessage.serializer(), message)}"
     
-    fun encodeChatMessage(message: ChatMessage): String {
-        return "$MSG_CHAT ${json.encodeToString(ChatMessage.serializer(), message)}"
-    }
+    fun encodeChatMessage(message: ChatMessage): String =
+        "$MSG_CHAT ${json.encodeToString(ChatMessage.serializer(), message)}"
     
-    fun encodeMapChangeMessage(message: MapChangeMessage): String {
-        return "$CMD_MAP ${json.encodeToString(MapChangeMessage.serializer(), message)}"
-    }
+    fun encodeMapChangeMessage(message: MapChangeMessage): String =
+        "$CMD_MAP ${json.encodeToString(MapChangeMessage.serializer(), message)}"
     
     // Function to create player list message
     fun createPlayersListMessage(players: List<PlayerSession>): String {

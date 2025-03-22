@@ -10,6 +10,5 @@
         <appender-ref ref="CONSOLE" />
     </root>
     
-    <!-- Set specific loggers -->
     <logger name="com.guildmaster.server" level="DEBUG" />
 </configuration> 

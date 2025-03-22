@@ -10,6 +10,10 @@ import kotlin.concurrent.withLock
 import java.util.UUID
 import com.guildmaster.server.player.Player
 
+private const val INACTIVITY_TIMEOUT_MS = 30_000L
+private const val INACTIVITY_CHECK_INTERVAL_S = 10L
+private const val SCHEDULER_SHUTDOWN_TIMEOUT_S = 5L
+
 /**
  * Thread-safe manager for player sessions with automatic cleanup of inactive sessions.
  * Handles session lifecycle, network address mappings, and map-based organization.
@@ -27,137 +31,104 @@ class SessionManager {
         Thread(runnable, "session-cleanup-thread").apply { isDaemon = true }
     }
     
-    private val inactivityTimeoutMillis = 30_000L
-    private val inactivityCheckIntervalSeconds = 10L
-    private val schedulerShutdownTimeoutSeconds = 5L
-    
     init {
         startInactivityMonitor()
     }
     
-    fun createSession(displayName: String, displayColor: String): Response<PlayerSession> {
-        if (displayName.isBlank()) {
-            return Response.Error("Player name cannot be blank")
-        }
-        
-        if (displayColor.isBlank()) {
-            return Response.Error("Player color cannot be blank")
-        }
-        
+    fun createSession(player: Player, tcpAddress: InetSocketAddress): Response<PlayerSession> {
         return try {
-            val id = generatePlayerId()
-            val session = PlayerSession(id, displayName, displayColor)
-            
-            lock.withLock {
-                sessions[id] = session
-                addSessionToMap(session.player.id, session.player.currentMapId)
-            }
-            
-            logger.info { "New session created: $id for player: $displayName with color: $displayColor" }
+            val session = PlayerSession(player, tcpAddress)
+            sessions[player.id] = session
+            tcpAddressToSessionId[tcpAddress] = player.id
             Response.Success(session)
         } catch (e: Exception) {
-            logger.error(e) { "Failed to create session for player: $displayName" }
-            Response.Error("Failed to create session", e)
+            logger.error(e) { "Failed to create session for player ${player.id}" }
+            Response.Error("Failed to create session: ${e.message}")
         }
     }
     
-    fun removeSession(targetSessionId: String): Response<Boolean> {
-        val session = sessions[targetSessionId] ?: return Response.Error("Session not found")
-        
-        return try {
-            lock.withLock {
-                cleanupSessionResources(session)
-                sessions.remove(targetSessionId)
-            }
-            
-            logger.info { "Session removed: $targetSessionId (${session.player.name})" }
-            Response.Success(true)
-        } catch (e: Exception) {
-            logger.error(e) { "Failed to remove session: $targetSessionId" }
-            Response.Error("Failed to remove session", e)
-        }
+    fun getSessionById(playerId: String): Response<PlayerSession> {
+        return sessions[playerId]?.let { Response.Success(it) }
+            ?: Response.Error("Session not found for player ID: $playerId")
     }
     
-    fun updateUdpAddress(targetSessionId: String, newUdpAddress: InetSocketAddress): Response<Unit> {
-        val session = sessions[targetSessionId] ?: return Response.Error("Session not found")
-        
+    fun getSessionByTcpAddress(address: InetSocketAddress): Response<PlayerSession> {
+        return tcpAddressToSessionId[address]?.let { playerId ->
+            sessions[playerId]?.let { Response.Success(it) }
+                ?: Response.Error("Session not found for TCP address: $address")
+        } ?: Response.Error("No session found for TCP address: $address")
+    }
+    
+    fun getSessionByUdpAddress(address: InetSocketAddress): Response<PlayerSession> {
+        return udpAddressToSessionId[address]?.let { playerId ->
+            sessions[playerId]?.let { Response.Success(it) }
+                ?: Response.Error("Session not found for UDP address: $address")
+        } ?: Response.Error("No session found for UDP address: $address")
+    }
+    
+    fun updateUdpAddress(playerId: String, udpAddress: InetSocketAddress): Response<Unit> {
         return try {
-            lock.withLock {
-                session.udpAddress?.let { oldAddress ->
-                    udpAddressToSessionId.remove(oldAddress)
-                }
-                
-                session.udpAddress = newUdpAddress
-                udpAddressToSessionId[newUdpAddress] = targetSessionId
-            }
-            
-            logger.debug { "UDP address updated for session ${session.player.id}: $newUdpAddress" }
+            val session = sessions[playerId] ?: return Response.Error("Session not found for player ID: $playerId")
+            session.udpAddress = udpAddress
+            udpAddressToSessionId[udpAddress] = playerId
             Response.Success(Unit)
         } catch (e: Exception) {
-            logger.error(e) { "Failed to update UDP address for session: $targetSessionId" }
-            Response.Error("Failed to update UDP address", e)
+            logger.error(e) { "Failed to update UDP address for player $playerId" }
+            Response.Error("Failed to update UDP address: ${e.message}")
         }
     }
     
-    fun updatePosition(targetSessionId: String, newXPosition: Float, newYPosition: Float): Response<Unit> {
-        val session = sessions[targetSessionId] ?: return Response.Error("Session not found")
-        
-        return try {
-            session.updatePosition(newXPosition, newYPosition)
-            logger.debug { "Position updated for ${session.player.name}: ($newXPosition, $newYPosition)" }
-            Response.Success(Unit)
-        } catch (e: Exception) {
-            logger.error(e) { "Failed to update position for session: $targetSessionId" }
-            Response.Error("Failed to update position", e)
-        }
-    }
-    
-    fun updateMap(targetSessionId: String, destinationMapId: String): Response<Unit> {
-        if (destinationMapId.isBlank()) {
+    fun getSessionsInMap(mapId: String): Response<List<PlayerSession>> {
+        if (mapId.isBlank()) {
             return Response.Error("Map ID cannot be blank")
         }
         
+        return try {
+            Response.Success(
+                mapToSessions[mapId]?.mapNotNull { sessions[it] } ?: emptyList()
+            )
+        } catch (e: Exception) {
+            logger.error(e) { "Failed to get sessions in map $mapId" }
+            Response.Error("Failed to get sessions in map: ${e.message}")
+        }
+    }
+    
+    fun getAllPlayers(): Response<List<Player>> {
+        return try {
+            Response.Success(sessions.values.map { it.player })
+        } catch (e: Exception) {
+            logger.error(e) { "Failed to get all players" }
+            Response.Error("Failed to get all players: ${e.message}")
+        }
+    }
+    
+    fun removeSession(playerId: String): Response<Unit> {
+        return try {
+            val session = sessions[playerId] ?: return Response.Error("Session not found for player ID: $playerId")
+            session.tcpAddress?.let { tcpAddressToSessionId.remove(it) }
+            session.udpAddress?.let { udpAddressToSessionId.remove(it) }
+            sessions.remove(playerId)
+            Response.Success(Unit)
+        } catch (e: Exception) {
+            logger.error(e) { "Failed to remove session for player $playerId" }
+            Response.Error("Failed to remove session: ${e.message}")
+        }
+    }
+    
+    fun updateMap(targetSessionId: String, newMapId: String): Response<Unit> {
         val session = sessions[targetSessionId] ?: return Response.Error("Session not found")
         
         return try {
             lock.withLock {
-                val oldMapId = session.player.currentMapId
-                
-                removeSessionFromMap(targetSessionId, oldMapId)
-                session.player.currentMapId = destinationMapId
-                addSessionToMap(targetSessionId, destinationMapId)
-                
-                logger.info { "Player ${session.player.name} changed from map $oldMapId to $destinationMapId" }
+                removeSessionFromMap(targetSessionId, session.player.currentMapId)
+                session.player.currentMapId = newMapId
+                addSessionToMap(targetSessionId, newMapId)
             }
             Response.Success(Unit)
         } catch (e: Exception) {
             logger.error(e) { "Failed to update map for session: $targetSessionId" }
-            Response.Error("Failed to update map", e)
+            Response.Error("Failed to update map: ${e.message}")
         }
-    }
-    
-    fun getSessionById(targetSessionId: String): Response<PlayerSession> =
-        sessions[targetSessionId]?.let { Response.Success(it) }
-            ?: Response.Error("Session not found")
-    
-    fun getSessionByTcpAddress(tcpAddress: InetSocketAddress): Response<PlayerSession> =
-        tcpAddressToSessionId[tcpAddress]?.let { sessionId ->
-            sessions[sessionId]?.let { Response.Success(it) }
-        } ?: Response.Error("Session not found for TCP address: $tcpAddress")
-    
-    fun getSessionByUdpAddress(udpAddress: InetSocketAddress): Response<PlayerSession> =
-        udpAddressToSessionId[udpAddress]?.let { sessionId ->
-            sessions[sessionId]?.let { Response.Success(it) }
-        } ?: Response.Error("Session not found for UDP address: $udpAddress")
-    
-    fun getSessionsInMap(targetMapId: String): Response<List<PlayerSession>> {
-        if (targetMapId.isBlank()) {
-            return Response.Error("Map ID cannot be blank")
-        }
-        
-        return Response.Success(
-            mapToSessions[targetMapId]?.mapNotNull { sessions[it] } ?: emptyList()
-        )
     }
     
     fun getAllSessions(): Response<List<PlayerSession>> =
@@ -181,7 +152,7 @@ class SessionManager {
             Response.Success(Unit)
         } catch (e: Exception) {
             logger.error(e) { "Failed to associate TCP address for session: $targetSessionId" }
-            Response.Error("Failed to associate TCP address", e)
+            Response.Error("Failed to associate TCP address: ${e.message}")
         }
     }
     
@@ -207,54 +178,29 @@ class SessionManager {
     private fun startInactivityMonitor() {
         scheduler.scheduleAtFixedRate(
             ::removeInactiveSessions,
-            inactivityCheckIntervalSeconds,
-            inactivityCheckIntervalSeconds,
+            INACTIVITY_CHECK_INTERVAL_S,
+            INACTIVITY_CHECK_INTERVAL_S,
             TimeUnit.SECONDS
         )
     }
     
     private fun removeInactiveSessions() {
-        when (val sessionsResult = getAllSessions()) {
-            is Response.Error -> {
-                logger.error { "Failed to get sessions for cleanup: ${sessionsResult.message}" }
-                return
-            }
-            is Response.Success -> {
-                val inactiveSessions = sessionsResult.data.filter { it.isInactive(inactivityTimeoutMillis) }
-                inactiveSessions.forEach { session ->
-                    logger.info { "Removing inactive session: ${session.player.id} (${session.player.name})" }
-                    when (val result = removeSession(session.player.id)) {
-                        is Response.Error -> logger.error { "Failed to remove inactive session: ${result.message}" }
-                        is Response.Success -> {} // Successfully removed
-                    }
-                }
+        sessions.values.forEach { session ->
+            if (session.isInactive(INACTIVITY_TIMEOUT_MS)) {
+                removeSession(session.player.id)
             }
         }
     }
     
     fun shutdown() {
-        stopScheduler()
-        clearResources()
-    }
-    
-    private fun stopScheduler() {
         scheduler.shutdown()
         try {
-            if (!scheduler.awaitTermination(schedulerShutdownTimeoutSeconds, TimeUnit.SECONDS)) {
-                logger.warn { "Session manager scheduler did not terminate in time" }
+            if (!scheduler.awaitTermination(SCHEDULER_SHUTDOWN_TIMEOUT_S, TimeUnit.SECONDS)) {
+                scheduler.shutdownNow()
             }
         } catch (e: InterruptedException) {
-            logger.error(e) { "Error shutting down session manager" }
+            scheduler.shutdownNow()
             Thread.currentThread().interrupt()
-        }
-    }
-    
-    private fun clearResources() {
-        lock.withLock {
-            sessions.clear()
-            tcpAddressToSessionId.clear()
-            udpAddressToSessionId.clear()
-            mapToSessions.clear()
         }
     }
 } 
