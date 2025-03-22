@@ -1,5 +1,6 @@
 package com.guildmaster.server
 
+import com.guildmaster.server.network.Protocol
 import mu.KotlinLogging
 import java.net.InetSocketAddress
 import kotlinx.serialization.json.Json

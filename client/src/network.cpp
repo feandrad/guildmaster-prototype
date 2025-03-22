@@ -383,27 +383,31 @@ void NetworkClient::checkTcpMessages() {
             }
         }
     }
-#ifdef _WIN32
-    else if (bytesReceived == SOCKET_ERROR && WSAGetLastError() != WSAEWOULDBLOCK) {
-        DEBUG_LOG("TCP receive error: " << WSAGetLastError());
-        disconnect();
-        status = ConnectionStatus::DISCONNECTED;
-        statusMessage = "Connection to server lost";
-    }
-#else
-    else if (bytesReceived == SOCKET_ERROR && errno != EAGAIN && errno != EWOULDBLOCK) {
-        DEBUG_LOG("TCP receive error: " << errno);
-        disconnect();
-        status = ConnectionStatus::DISCONNECTED;
-        statusMessage = "Connection to server lost";
-    }
-#endif
     else if (bytesReceived == 0) {
         // Connection closed by server
         DEBUG_LOG("Server closed the connection");
         disconnect();
         status = ConnectionStatus::DISCONNECTED;
         statusMessage = "Server closed the connection";
+    }
+    else {
+        // Check for socket errors
+#ifdef _WIN32
+        int error = WSAGetLastError();
+        if (error != WSAEWOULDBLOCK) {
+            DEBUG_LOG("TCP receive error: " << error);
+            disconnect();
+            status = ConnectionStatus::DISCONNECTED;
+            statusMessage = "Connection to server lost";
+        }
+#else
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            DEBUG_LOG("TCP receive error: " << errno);
+            disconnect();
+            status = ConnectionStatus::DISCONNECTED;
+            statusMessage = "Connection to server lost";
+        }
+#endif
     }
 }
 
@@ -455,8 +459,8 @@ void NetworkClient::processServerMessage(const std::string& message) {
             
             if (command == "CONFIG") {
                 // Configuration message
-                if (data.contains("playerId") && data.contains("color")) {
-                    playerId = data["playerId"];
+                if (data.contains("id") && data.contains("color")) {
+                    playerId = data["id"];
                     playerColor = data["color"];
                     DEBUG_LOG("Received CONFIG message. Player ID: " << playerId << ", Color: " << playerColor);
                     
@@ -642,8 +646,8 @@ void NetworkClient::processServerMessage(const std::string& message) {
             
             if (type == "CONFIG") {
                 // Configuration message
-                if (data.contains("playerId") && data.contains("color")) {
-                    playerId = data["playerId"];
+                if (data.contains("id") && data.contains("color")) {
+                    playerId = data["id"];
                     playerColor = data["color"];
                     DEBUG_LOG("Received CONFIG message (JSON). Player ID: " << playerId << ", Color: " << playerColor);
                     

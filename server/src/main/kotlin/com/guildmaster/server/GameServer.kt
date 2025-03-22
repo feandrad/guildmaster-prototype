@@ -1,5 +1,7 @@
 package com.guildmaster.server
 
+import com.guildmaster.server.network.Protocol
+import com.guildmaster.server.session.SessionManager
 import kotlinx.coroutines.*
 import mu.KotlinLogging
 import java.net.*
@@ -199,8 +201,8 @@ class GameServer(
             }
             
             // Associate the UDP address with the session
-            sessionManager.updateUdpAddress(session.id, sender)
-            logger.info { "UDP address $sender registered for player ${session.name} (${session.id})" }
+            sessionManager.updateUdpAddress(session.player.id, sender)
+            logger.info { "UDP address $sender registered for player ${session.player.name} (${session.player.id})" }
             
             // Acknowledge registration
             sendUdpPacket(sender, "UDP_REGISTERED\n")
@@ -208,24 +210,24 @@ class GameServer(
             // After UDP registration, make sure we send a new position update to the client
             // This ensures they have their assigned position
             val positionMessage = Protocol.PositionMessage(
-                playerId = session.id,
-                x = session.x,
-                y = session.y,
-                mapId = session.currentMapId
+                playerId = session.player.id,
+                x = session.player.x,
+                y = session.player.y,
+                mapId = session.player.currentMapId
             )
             
             val posMsg = Protocol.encodePositionMessage(positionMessage)
             sendUdpPacket(sender, "$posMsg\n")
-            logger.debug { "Sent initial position after UDP registration: (${session.x}, ${session.y})" }
+            logger.debug { "Sent initial position after UDP registration: (${session.player.x}, ${session.player.y})" }
             
             // Also send a full player list update via TCP
             sessionManager.getSessionByTcpAddress(session.tcpAddress!!)?.let { tcpSession ->
-                val tcpClient = clients.find { it.sessionId == tcpSession.id }
+                val tcpClient = clients.find { it.sessionId == tcpSession.player.id }
                 if (tcpClient != null) {
-                    val allPlayers = sessionManager.getSessionsInMap(session.currentMapId)
+                    val allPlayers = sessionManager.getSessionsInMap(session.player.currentMapId)
                     val playersMessage = Protocol.createPlayersListMessage(allPlayers)
                     tcpClient.sendMessage(playersMessage)
-                    logger.debug { "Sent updated player list to ${session.name} after UDP registration" }
+                    logger.debug { "Sent updated player list to ${session.player.name} after UDP registration" }
                 }
             }
         } catch (e: Exception) {
@@ -252,13 +254,13 @@ class GameServer(
             val posData = Protocol.json.decodeFromString<Protocol.PositionMessage>(jsonPart)
             
             // Update the player's position
-            sessionManager.updatePosition(session.id, posData.x, posData.y)
+            sessionManager.updatePosition(session.player.id, posData.x, posData.y)
             
             // Propagate the update to other players on the same map
-            val playersInMap = sessionManager.getSessionsInMap(session.currentMapId)
+            val playersInMap = sessionManager.getSessionsInMap(session.player.currentMapId)
             
             for (otherPlayer in playersInMap) {
-                if (otherPlayer.id != session.id && otherPlayer.udpAddress != null) {
+                if (otherPlayer.player.id != session.player.id && otherPlayer.udpAddress != null) {
                     sendUdpPacket(otherPlayer.udpAddress!!, positionMessage + "\n")
                 }
             }
@@ -279,10 +281,10 @@ class GameServer(
             }
             
             // Propagate the action to other players on the same map
-            val playersInMap = sessionManager.getSessionsInMap(session.currentMapId)
+            val playersInMap = sessionManager.getSessionsInMap(session.player.currentMapId)
             
             for (otherPlayer in playersInMap) {
-                if (otherPlayer.id != session.id && otherPlayer.udpAddress != null) {
+                if (otherPlayer.player.id != session.player.id && otherPlayer.udpAddress != null) {
                     sendUdpPacket(otherPlayer.udpAddress!!, actionMessage + "\n")
                 }
             }
@@ -369,18 +371,25 @@ class GameServer(
             val session = sessionManager.createSession(playerName, playerColor)
             
             // Associate the TCP client with this session
-            client.sessionId = session.id
+            client.sessionId = session.player.id
             
             // Associate the TCP address with the session
             session.tcpAddress = client.clientAddress
-            sessionManager.associateTcpAddress(client.clientAddress, session.id)
+            sessionManager.associateTcpAddress(client.clientAddress, session.player.id)
             
             // Log successful connection
-            logger.info { "Player connected: $playerName (${session.id}) with color $playerColor" }
+            logger.info { "Player connected: $playerName (${session.player.id}) with color $playerColor" }
             
             // Send configuration message back to client
-            val configMessage = Protocol.ConfigMessage(session.id, session.color, session.currentMapId)
-            client.sendMessage(Protocol.encodeConfigMessage(configMessage))
+            val configMessage = Protocol.ConfigMessage(
+                id = session.player.id,
+                udpPort = udpPort,
+                color = session.player.color,
+                mapId = session.player.currentMapId
+            )
+            val configMsg = Protocol.encodeConfigMessage(configMessage)
+            logger.debug { "Sending config message to client: $configMsg" }
+            client.sendMessage(configMsg)
             
             // Notify all clients of player list update (with a small delay to prevent overwhelming connections)
             GlobalScope.launch {
@@ -412,22 +421,22 @@ class GameServer(
             val configData = Protocol.json.decodeFromString<Protocol.ConfigMessage>(jsonPart)
             
             // Verify session ID is valid
-            if (configData.playerId != session.id) {
+            if (configData.id != session.player.id) {
                 client.sendMessage("ERROR Invalid player ID")
                 return
             }
             
             // Update player configuration
-            if (configData.color.isNotBlank()) {
-                session.color = configData.color
+            if (configData.color?.isNotBlank() == true) {
+                session.player.color = configData.color
             }
             
-            if (configData.mapId.isNotBlank() && configData.mapId != session.currentMapId) {
-                sessionManager.updateMap(session.id, configData.mapId)
+            if (configData.mapId?.isNotBlank() == true && configData.mapId != session.player.currentMapId) {
+                sessionManager.updateMap(session.player.id, configData.mapId)
             }
             
             client.sendMessage("CONFIG_OK")
-            logger.debug { "Configuration updated for ${session.name}" }
+            logger.debug { "Configuration updated for ${session.player.name}" }
             
         } catch (e: Exception) {
             logger.error(e) { "Error processing CONFIG command" }
@@ -454,14 +463,14 @@ class GameServer(
             val mapData = Protocol.json.decodeFromString<Protocol.MapChangeMessage>(jsonPart)
             
             // Update player's map
-            val oldMapId = session.currentMapId
-            sessionManager.updateMap(session.id, mapData.mapId)
+            val oldMapId = session.player.currentMapId
+            sessionManager.updateMap(session.player.id, mapData.mapId)
             
             // Notify players on affected maps
             notifyMapChange(oldMapId)
             notifyMapChange(mapData.mapId)
             
-            logger.info { "Player ${session.name} changed from map $oldMapId to ${mapData.mapId}" }
+            logger.info { "Player ${session.player.name} changed from map $oldMapId to ${mapData.mapId}" }
             
         } catch (e: Exception) {
             logger.error(e) { "Error processing MAP command" }
@@ -488,18 +497,18 @@ class GameServer(
             val chatData = Protocol.json.decodeFromString<Protocol.ChatMessage>(jsonPart)
             
             // Verify session ID is valid
-            if (chatData.playerId != session.id) {
+            if (chatData.playerId != session.player.id) {
                 client.sendMessage("ERROR Invalid player ID")
                 return
             }
             
             // Propagate the message to all players on the same map
-            val playersInMap = sessionManager.getSessionsInMap(session.currentMapId)
+            val playersInMap = sessionManager.getSessionsInMap(session.player.currentMapId)
             
             val chatMessage = Protocol.encodeChatMessage(
                 Protocol.ChatMessage(
-                    playerId = session.id,
-                    playerName = session.name,
+                    playerId = session.player.id,
+                    playerName = session.player.name,
                     text = chatData.text
                 )
             )
@@ -509,7 +518,7 @@ class GameServer(
                 playerClient?.sendMessage(chatMessage)
             }
             
-            logger.debug { "Chat message from ${session.name}: ${chatData.text}" }
+            logger.debug { "Chat message from ${session.player.name}: ${chatData.text}" }
             
         } catch (e: Exception) {
             logger.error(e) { "Error processing CHAT command" }
@@ -540,7 +549,7 @@ class GameServer(
         val mapMessage = Protocol.encodeMapChangeMessage(
             Protocol.MapChangeMessage(
                 mapId = mapId,
-                playerIds = playersInMap.map { it.id }
+                playerIds = playersInMap.map { it.player.id }
             )
         )
         
@@ -571,14 +580,14 @@ class GameServer(
         
         val session = sessionManager.getSessionByTcpAddress(client.clientAddress)
         if (session != null) {
-            val mapId = session.currentMapId
-            sessionManager.removeSession(session.id)
+            val mapId = session.player.currentMapId
+            sessionManager.removeSession(session.player.id)
             
             // Notify remaining players
             broadcastPlayersList()
             notifyMapChange(mapId)
             
-            logger.info { "Client disconnected: ${session.name} (${client.clientAddress})" }
+            logger.info { "Client disconnected: ${session.player.name} (${client.clientAddress})" }
         } else {
             logger.info { "Client disconnected: ${client.clientAddress}" }
         }

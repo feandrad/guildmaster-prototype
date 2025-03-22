@@ -10,6 +10,9 @@
 #include "player_manager.h"
 #include "color_utils.h"
 
+// Constants
+#define MAX_CHAT_MESSAGES 10
+
 // Game state enumeration
 enum class GameState {
     INPUT_NAME,

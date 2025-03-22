@@ -1,4 +1,4 @@
-package com.guildmaster.server
+package com.guildmaster.server.session
 
 import mu.KotlinLogging
 import java.net.InetSocketAddress
@@ -46,20 +46,15 @@ class SessionManager {
      */
     fun createSession(playerName: String, playerColor: String): PlayerSession {
         val id = generatePlayerId()
-        val session = PlayerSession(id, playerName)
-        
-        // Set player color if provided
-        if (playerColor.isNotBlank()) {
-            session.color = playerColor
-        }
+        val session = PlayerSession(id, playerName, playerColor)
         
         // Store the session
         sessions[id] = session
         
         // Add the session to the default map
-        addSessionToMap(session.id, session.currentMapId)
+        addSessionToMap(session.player.id, session.player.currentMapId)
         
-        logger.info { "New session created: $id for player: $playerName" }
+        logger.info { "New session created: $id for player: $playerName with color: $playerColor" }
         
         return session
     }
@@ -78,7 +73,7 @@ class SessionManager {
         sessions[sessionId]?.let { session ->
             session.udpAddress = udpAddress
             udpAddressToSessionId[udpAddress] = sessionId
-            logger.debug { "UDP address updated for session ${session.id}: $udpAddress" }
+            logger.debug { "UDP address updated for session ${session.player.id}: $udpAddress" }
         }
     }
     
@@ -88,7 +83,7 @@ class SessionManager {
     fun updatePosition(sessionId: String, x: Float, y: Float) {
         sessions[sessionId]?.let { session ->
             session.updatePosition(x, y)
-            logger.debug { "Position updated for ${session.name}: ($x, $y)" }
+            logger.debug { "Position updated for ${session.player.name}: ($x, $y)" }
         }
     }
     
@@ -98,15 +93,15 @@ class SessionManager {
     fun updateMap(sessionId: String, mapId: String) {
         sessions[sessionId]?.let { session ->
             // Remove from current map
-            removeSessionFromMap(sessionId, session.currentMapId)
+            removeSessionFromMap(sessionId, session.player.currentMapId)
             
             // Update the map
-            session.currentMapId = mapId
+            session.player.currentMapId = mapId
             
             // Add to new map
             addSessionToMap(sessionId, mapId)
             
-            logger.info { "Player ${session.name} changed to map: $mapId" }
+            logger.info { "Player ${session.player.name} changed to map: $mapId" }
         }
     }
     
@@ -132,7 +127,7 @@ class SessionManager {
     /**
      * Get a session by ID.
      */
-    fun getSession(sessionId: String): PlayerSession? {
+    fun getSessionById(sessionId: String): PlayerSession? {
         return sessions[sessionId]
     }
     
@@ -153,10 +148,10 @@ class SessionManager {
     }
     
     /**
-     * Get a session by player ID
+     * Get all sessions in a map.
      */
-    fun getSessionById(playerId: String): PlayerSession? {
-        return sessions[playerId]
+    fun getSessionsInMap(mapId: String): List<PlayerSession> {
+        return mapToSessions[mapId]?.mapNotNull { sessions[it] } ?: emptyList()
     }
     
     /**
@@ -167,29 +162,23 @@ class SessionManager {
     }
     
     /**
-     * Get all sessions on a specific map.
-     */
-    fun getSessionsInMap(mapId: String): List<PlayerSession> {
-        val sessionIds = mapToSessions[mapId] ?: return emptyList()
-        return sessionIds.mapNotNull { sessions[it] }
-    }
-    
-    /**
      * Remove a session.
      */
     fun removeSession(sessionId: String) {
         sessions[sessionId]?.let { session ->
-            // Remove from maps
-            removeSessionFromMap(sessionId, session.currentMapId)
+            // Remove from map
+            removeSessionFromMap(sessionId, session.player.currentMapId)
             
-            // Remove from address mappings
+            // Remove TCP address mapping
             session.tcpAddress?.let { tcpAddressToSessionId.remove(it) }
+            
+            // Remove UDP address mapping
             session.udpAddress?.let { udpAddressToSessionId.remove(it) }
             
-            // Remove from sessions list
+            // Remove session
             sessions.remove(sessionId)
             
-            logger.info { "Session removed: ${session.id} (${session.name})" }
+            logger.info { "Session removed: $sessionId (${session.player.name})" }
         }
     }
     
@@ -198,13 +187,9 @@ class SessionManager {
      */
     private fun cleanupInactiveSessions() {
         val inactiveSessions = sessions.values.filter { it.isInactive(sessionTimeoutMs) }
-        
-        if (inactiveSessions.isNotEmpty()) {
-            logger.info { "Removing ${inactiveSessions.size} inactive sessions" }
-            
-            inactiveSessions.forEach { session ->
-                removeSession(session.id)
-            }
+        inactiveSessions.forEach { session ->
+            logger.info { "Removing inactive session: ${session.player.id} (${session.player.name})" }
+            removeSession(session.player.id)
         }
     }
     
@@ -212,20 +197,18 @@ class SessionManager {
      * Format the player list in the current system format (just names).
      */
     fun getPlayersList(): List<Pair<String, String>> {
-        return sessions.values.map { it.id to it.name }
+        return sessions.values.map { it.player.id to it.player.name }
     }
     
     /**
-     * Shut down the session manager.
+     * Shutdown the session manager.
      */
     fun shutdown() {
         scheduler.shutdown()
         try {
-            if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
-                scheduler.shutdownNow()
-            }
+            scheduler.awaitTermination(5, TimeUnit.SECONDS)
         } catch (e: InterruptedException) {
-            scheduler.shutdownNow()
+            logger.error { "Error shutting down session manager: ${e.message}" }
         }
         
         sessions.clear()

@@ -6,7 +6,7 @@
 #include <unordered_map>
 
 // Constants
-#define MAX_CHAT_MESSAGES 10
+const int MAX_CHAT_MESSAGES = 50;  // Maximum number of chat messages to display
 
 // Forward declarations
 struct Player;
