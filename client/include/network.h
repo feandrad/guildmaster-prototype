@@ -9,6 +9,7 @@
 #include <queue>
 #include <functional>
 #include <memory>
+#include <chrono>
 
 // Platform-specific socket definitions
 #ifdef _WIN32
@@ -26,8 +27,8 @@
     #include <arpa/inet.h>
     #include <netdb.h>
     #include <unistd.h>
-    #include <fcntl.h>
     #include <errno.h>
+    #include <fcntl.h>
     #define ISVALIDSOCKET(s) ((s) >= 0)
     #define CLOSESOCKET(s) close(s)
     #define GETSOCKETERRNO() (errno)
@@ -67,24 +68,28 @@ public:
     void disconnect();
     
     // Send messages
-    bool sendConnectRequest(const std::string& playerName);
+    bool sendConnectRequest(const std::string& name, const std::string& color = "RED");
     bool sendPositionUpdate(float x, float y);
     bool sendChatMessage(const std::string& message);
     bool sendMapChange(const std::string& mapId);
+    bool sendConfigUpdate(const std::string& color);
     
     // Status and info
     ConnectionStatus getStatus() const { return status; }
     const std::string& getStatusMessage() const { return statusMessage; }
     const std::string& getPlayerId() const { return playerId; }
+    const std::string& getPlayerColor() const { return playerColor; }
     const std::vector<PlayerInfo>& getPlayers() const { return players; }
+    const std::vector<std::string>& getChatMessages() const { return chatMessages; }
+    bool isConnected() const { return status == ConnectionStatus::CONNECTED; }
+    bool isUdpRegistered() const { return udpRegistered; }
     
     // Update and process
     void update();
     
     // Set callback for player list updates
-    void setPlayerListCallback(std::function<void(const std::vector<PlayerInfo>&)> callback) {
-        playerListCallback = callback;
-    }
+    using PlayerListCallback = std::function<void(const std::vector<PlayerInfo>&)>;
+    void setPlayerListCallback(PlayerListCallback callback) { playerListCallback = callback; }
 
 private:
     // Socket management
@@ -101,12 +106,13 @@ private:
     std::string playerId;
     std::string playerColor;
     std::vector<PlayerInfo> players;
+    std::vector<std::string> chatMessages;
     
     // Processing
     std::string tcpBuffer;
     
     // Callbacks
-    std::function<void(const std::vector<PlayerInfo>&)> playerListCallback;
+    PlayerListCallback playerListCallback;
     
     // Helper methods
     bool sendTcpMessage(const std::string& message);
@@ -115,4 +121,17 @@ private:
     void checkTcpMessages();
     void checkUdpMessages();
     bool setSocketNonBlocking(socket_t socket);
+    bool checkTcpConnectionStatus();
+    
+    // New member variables
+    bool tcpConnectPending = false;
+    std::chrono::steady_clock::time_point connectStartTime;
+    std::string pendingConnectName;
+    bool udpRegistered;
+    
+    // Connection timeout handling
+    std::chrono::steady_clock::time_point lastMessageTime = std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point lastPingTime = std::chrono::steady_clock::now();
+    const int connectionTimeout = 15; // seconds before considering disconnected (increased from 10)
+    const int pingInterval = 3; // seconds between pings (reduced from 5)
 }; 

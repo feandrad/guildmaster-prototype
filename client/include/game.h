@@ -7,6 +7,9 @@
 #include <unordered_map>
 #include "network.h"
 
+// Constants
+#define MAX_CHAT_MESSAGES 10
+
 // Player representation in the game
 struct Player {
     std::string id;
@@ -68,11 +71,20 @@ private:
     // Network update
     void updatePlayerInfo();
     void sendPlayerUpdate();
+    void processPositionUpdate(const std::string& playerId, float x, float y);
     
     // Player management
     void updateLocalPlayer(float deltaTime);
     void updatePlayers(const std::vector<PlayerInfo>& playerInfos);
     void processPlayerInput();
+    
+    // Color selection
+    void drawColorSelector();
+    void handleColorSelection();
+    Color getColorFromIndex(int index);
+    std::string ColorToString(Color color);
+    Color parseColorString(const std::string& colorStr);
+    bool ColorEquals(Color a, Color b);
     
     // Variables
     GameState state = GameState::INPUT_NAME;
@@ -101,6 +113,14 @@ private:
     // UI
     Rectangle nameInputBox = { 0 };
     bool nameInputActive = false;
+    
+    // Color selection
+    const int NUM_COLORS = 8;
+    Color availableColors[8] = {
+        RED, GREEN, BLUE, YELLOW, PURPLE, ORANGE, PINK, SKYBLUE
+    };
+    int selectedColorIndex = 0;
+    Rectangle colorButtons[8];
     
     // Chat
     std::vector<std::string> chatMessages;

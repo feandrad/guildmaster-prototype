@@ -45,6 +45,13 @@ data class PlayerSession(
     @kotlinx.serialization.Transient
     var lastUdpActivity: Long = System.currentTimeMillis()
 ) {
+    // Constructor for simplified session creation
+    constructor(id: String, name: String) : this(
+        id = id,
+        name = name,
+        color = randomColor()
+    )
+    
     companion object {
         // Predefined player colors
         private val PLAYER_COLORS = listOf(

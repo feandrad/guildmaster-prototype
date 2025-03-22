@@ -10,6 +10,13 @@ import java.nio.channels.SocketChannel
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 import kotlin.concurrent.thread
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import java.nio.channels.SelectionKey
+import java.nio.channels.Selector
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.TimeUnit
 
 /**
  * Main game server, responsible for managing TCP and UDP connections.
@@ -154,15 +161,51 @@ class GameServer(
             
             logger.debug { "UDP packet received from $sender: $message" }
             
-            if (message.startsWith(Protocol.MSG_POS)) {
+            if (message.startsWith(Protocol.CMD_POS)) {
                 handlePositionUpdate(sender, message)
-            } else if (message.startsWith(Protocol.MSG_ACTION)) {
+            } else if (message.startsWith(Protocol.CMD_ACTION)) {
                 handleActionPacket(sender, message)
-            } else if (message.startsWith(Protocol.MSG_PING)) {
+            } else if (message.startsWith(Protocol.CMD_PING)) {
                 sendUdpPacket(sender, "${Protocol.MSG_PONG}\n")
+            } else if (message.startsWith(Protocol.CMD_UDP_REGISTER)) {
+                handleUdpRegistration(sender, message)
             }
         } catch (e: Exception) {
             logger.error(e) { "Error processing UDP packet from $sender" }
+        }
+    }
+    
+    /**
+     * Handle UDP registration to associate UDP address with TCP session
+     */
+    private fun handleUdpRegistration(sender: InetSocketAddress, message: String) {
+        try {
+            // Get the JSON part of the message
+            val jsonPart = message.substringAfter(" ", "")
+            if (jsonPart.isBlank()) {
+                logger.warn { "Invalid UDP registration message format from $sender" }
+                return
+            }
+            
+            // Parse the registration message
+            val regData = Protocol.json.decodeFromString<Protocol.UdpRegisterMessage>(jsonPart)
+            val playerId = regData.playerId
+            
+            // Find the session by player ID
+            val session = sessionManager.getSessionById(playerId)
+            if (session == null) {
+                logger.warn { "Session not found for player ID $playerId during UDP registration" }
+                return
+            }
+            
+            // Associate the UDP address with the session
+            sessionManager.updateUdpAddress(session.id, sender)
+            logger.info { "UDP address $sender registered for player ${session.name} (${session.id})" }
+            
+            // Acknowledge registration
+            sendUdpPacket(sender, "UDP_REGISTERED\n")
+        } catch (e: Exception) {
+            logger.error(e) { "Error processing UDP registration from $sender" }
         }
     }
     
@@ -237,31 +280,36 @@ class GameServer(
     }
     
     /**
-     * Process a received TCP command.
+     * Process TCP commands from clients
      */
     fun handleTcpCommand(client: TcpClientHandler, command: String) {
-        logger.debug { "TCP command from ${client.clientAddress}: $command" }
+        logger.debug { "Processing TCP command: $command from ${client.clientAddress}" }
         
         try {
             when {
-                command.startsWith(Protocol.MSG_CONNECT) -> {
+                command.startsWith(Protocol.CMD_CONNECT) -> {
                     handleConnectCommand(client, command)
                 }
-                command.startsWith(Protocol.MSG_CONFIG) -> {
+                command.startsWith(Protocol.CMD_CONFIG) -> {
                     handleConfigCommand(client, command)
                 }
-                command.startsWith(Protocol.MSG_MAP) -> {
-                    handleMapChangeCommand(client, command)
+                command.startsWith(Protocol.CMD_MAP) -> {
+                    handleMapCommand(client, command)
                 }
-                command.startsWith(Protocol.MSG_CHAT) -> {
+                command.startsWith(Protocol.CMD_CHAT) -> {
                     handleChatCommand(client, command)
+                }
+                command.startsWith(Protocol.CMD_PING) -> {
+                    handlePingCommand(client, command)
                 }
                 else -> {
                     logger.warn { "Unknown TCP command: $command" }
+                    client.sendMessage("ERROR Unknown command")
                 }
             }
         } catch (e: Exception) {
-            logger.error(e) { "Error processing TCP command: $command" }
+            logger.error(e) { "Error processing command: $command" }
+            client.sendMessage("ERROR Internal server error")
         }
     }
     
@@ -270,34 +318,54 @@ class GameServer(
      */
     private fun handleConnectCommand(client: TcpClientHandler, command: String) {
         try {
-            // Original format: "CONNECT name"
-            val playerName = command.substringAfter(" ").trim()
+            // Get the JSON part of the message
+            val jsonPart = command.substringAfter(" ", "")
+            if (jsonPart.isBlank()) {
+                logger.warn { "Invalid connect command format from ${client.clientAddress}" }
+                client.sendMessage("ERROR Invalid connect command format")
+                return
+            }
             
+            // Parse the connect message
+            val connectMsg = Protocol.json.decodeFromString<Protocol.ConnectMessage>(jsonPart)
+            val playerName = connectMsg.name
+            val playerColor = connectMsg.color
+            
+            // Log connection request
+            logger.debug { "Connect request from ${client.clientAddress} with name: $playerName, color: $playerColor" }
+            
+            // Make sure the player name isn't empty
             if (playerName.isBlank()) {
+                logger.warn { "Invalid player name from ${client.clientAddress}" }
                 client.sendMessage("ERROR Invalid player name")
                 return
             }
             
-            // Create the session
-            val session = sessionManager.createSession(playerName, client.clientAddress)
+            // Create a new session for this player
+            val session = sessionManager.createSession(playerName, playerColor)
             
-            // Notify the client about its configuration
-            val configMsg = Protocol.encodeConfigMessage(
-                Protocol.ConfigMessage(
-                    playerId = session.id,
-                    color = session.color,
-                    mapId = session.currentMapId
-                )
-            )
-            client.sendMessage(configMsg)
+            // Associate the TCP client with this session
+            client.sessionId = session.id
             
-            // Send updated player list to everyone
-            broadcastPlayersList()
+            // Associate the TCP address with the session
+            session.tcpAddress = client.clientAddress
+            sessionManager.associateTcpAddress(client.clientAddress, session.id)
             
-            logger.info { "Player connected: ${session.name} (${session.id})" }
+            // Log successful connection
+            logger.info { "Player connected: $playerName (${session.id}) with color $playerColor" }
+            
+            // Send configuration message back to client
+            val configMessage = Protocol.ConfigMessage(session.id, session.color, session.currentMapId)
+            client.sendMessage(Protocol.encodeConfigMessage(configMessage))
+            
+            // Notify all clients of player list update (with a small delay to prevent overwhelming connections)
+            GlobalScope.launch {
+                delay(100) // Small delay to allow client processing
+                broadcastPlayersList()
+            }
         } catch (e: Exception) {
-            logger.error(e) { "Error processing CONNECT command" }
-            client.sendMessage("ERROR Failed to connect")
+            logger.error(e) { "Error processing connect command from ${client.clientAddress}" }
+            client.sendMessage("ERROR Internal server error during connection")
         }
     }
     
@@ -346,7 +414,7 @@ class GameServer(
     /**
      * Process the MAP command.
      */
-    private fun handleMapChangeCommand(client: TcpClientHandler, command: String) {
+    private fun handleMapCommand(client: TcpClientHandler, command: String) {
         try {
             // Get the session associated with this client
             val session = sessionManager.getSessionByTcpAddress(client.clientAddress)
@@ -426,6 +494,19 @@ class GameServer(
     }
     
     /**
+     * Process the PING command.
+     */
+    private fun handlePingCommand(client: TcpClientHandler, command: String) {
+        try {
+            // Send PONG response - used for connection keepalive
+            client.sendMessage(Protocol.MSG_PONG)
+        } catch (e: Exception) {
+            logger.error(e) { "Error processing PING command" }
+            client.sendMessage("ERROR Failed to respond to PING")
+        }
+    }
+    
+    /**
      * Notify players on a map about changes.
      */
     private fun notifyMapChange(mapId: String) {
@@ -450,7 +531,7 @@ class GameServer(
      * Send the player list to all connected clients.
      */
     fun broadcastPlayersList() {
-        val players = sessionManager.getPlayersList()
+        val players = sessionManager.getAllSessions()
         val playersMessage = Protocol.createPlayersListMessage(players)
         
         for (client in tcpClients) {
@@ -521,6 +602,9 @@ class TcpClientHandler(
     
     @Volatile
     private var isRunning = true
+    
+    // Session ID associated with this client
+    var sessionId: String? = null
     
     override fun run() {
         try {

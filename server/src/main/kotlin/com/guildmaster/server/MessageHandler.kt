@@ -21,17 +21,17 @@ class MessageHandlerExample {
             
             // Parse the message based on protocol prefixes
             when {
-                message.startsWith(Protocol.MSG_CONNECT) -> {
+                message.startsWith(Protocol.CMD_CONNECT) -> {
                     val playerName = message.substringAfter(" ").trim()
                     logger.info { "Connect request from $address with name: $playerName" }
                 }
-                message.startsWith(Protocol.MSG_CHAT) -> {
+                message.startsWith(Protocol.CMD_CHAT) -> {
                     logger.debug { "Chat message from $address" }
                 }
-                message.startsWith(Protocol.MSG_MAP) -> {
+                message.startsWith(Protocol.CMD_MAP) -> {
                     logger.debug { "Map change from $address" }
                 }
-                message.startsWith(Protocol.MSG_CONFIG) -> {
+                message.startsWith(Protocol.CMD_CONFIG) -> {
                     logger.debug { "Config update from $address" }
                 }
                 else -> {
@@ -52,13 +52,13 @@ class MessageHandlerExample {
             
             // Parse the message based on protocol prefixes
             when {
-                message.startsWith(Protocol.MSG_POS) -> {
+                message.startsWith(Protocol.CMD_POS) -> {
                     logger.debug { "Position update from $address" }
                 }
-                message.startsWith(Protocol.MSG_ACTION) -> {
+                message.startsWith(Protocol.CMD_ACTION) -> {
                     logger.debug { "Action from $address" }
                 }
-                message.startsWith(Protocol.MSG_PING) -> {
+                message.startsWith(Protocol.CMD_PING) -> {
                     logger.debug { "Ping from $address" }
                 }
                 else -> {

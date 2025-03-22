@@ -1,48 +1,54 @@
 package com.guildmaster.server
 
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 /**
- * Defines the Guild Master communication protocol.
- *
- * TCP Protocol: Used for:
- * - Initial handshake (CONNECT)
- * - Player list updates (PLAYERS)
- * - Session configuration (CONFIG)
- * - Map changes (MAP)
- * - Chat messages (CHAT)
- *
- * UDP Protocol: Used for:
- * - Position updates (POS)
- * - Quick actions (ACTION)
- * - Heartbeat (PING/PONG)
+ * Protocol definition for client-server communication.
  */
 object Protocol {
-    
-    // JSON format for serialization/deserialization
-    val json = Json { 
-        prettyPrint = false 
+    // Setup JSON serializer
+    @OptIn(ExperimentalSerializationApi::class)
+    val json = Json {
         ignoreUnknownKeys = true
+        isLenient = true
+        prettyPrint = false
         encodeDefaults = true
     }
     
+    // Client commands
+    const val CMD_CONNECT = "CONNECT"
+    const val CMD_CONFIG = "CONFIG"
+    const val CMD_MAP = "MAP"
+    const val CMD_CHAT = "CHAT"
+    const val CMD_UDP_REGISTER = "UDP_REGISTER"
+    const val CMD_POS = "POS"
+    const val CMD_PING = "PING"
+    const val CMD_ACTION = "ACTION"
+    
+    // Server messages
+    const val MSG_CONFIG = "CONFIG"
+    const val MSG_PLAYERS = "PLAYERS"
+    const val MSG_CHAT = "CHAT"
+    const val MSG_UDP_REGISTERED = "UDP_REGISTERED"
+    const val MSG_POS = "POS"
+    const val MSG_PONG = "PONG"
+    const val MSG_ERROR = "ERROR"
+    
+    // Timeouts
+    const val CONNECTION_TIMEOUT_MS = 30000 // 30 seconds
+    
     // Constants for message types
     const val MSG_CONNECT = "CONNECT"
-    const val MSG_PLAYERS = "PLAYERS"
-    const val MSG_CONFIG = "CONFIG"
     const val MSG_MAP = "MAP"
-    const val MSG_CHAT = "CHAT"
-    const val MSG_POS = "POS"
     const val MSG_ACTION = "ACTION"
-    const val MSG_PING = "PING"
-    const val MSG_PONG = "PONG"
+    const val MSG_UDP_REGISTER = "UDP_REGISTER"
     
     // Serializable message classes
-    
     @Serializable
-    data class ConnectMessage(val playerId: String, val playerName: String)
+    data class ConnectMessage(val name: String, val color: String = "#FF0000")
     
     @Serializable
     data class ConfigMessage(val playerId: String, val color: String, val mapId: String)
@@ -51,16 +57,17 @@ object Protocol {
     data class PositionMessage(
         val playerId: String, 
         val x: Float, 
-        val y: Float, 
-        val timestamp: Long = System.currentTimeMillis()
+        val y: Float,
+        val mapId: String = "default"
     )
     
     @Serializable
     data class ActionMessage(
         val playerId: String, 
-        val actionType: String, 
-        val x: Float? = null, 
-        val y: Float? = null
+        val actionType: String,
+        val targetId: String = "",
+        val x: Float = 0f,
+        val y: Float = 0f
     )
     
     @Serializable
@@ -69,10 +76,16 @@ object Protocol {
     @Serializable
     data class MapChangeMessage(val mapId: String, val playerIds: List<String>)
     
+    @Serializable
+    data class UdpRegisterMessage(val playerId: String)
+    
+    @Serializable
+    data class PlayerInfo(val id: String, val name: String, val color: String)
+    
     // Utility functions for encoding/decoding messages
     
     fun encodeConnectMessage(message: ConnectMessage): String {
-        return "$MSG_CONNECT ${json.encodeToString(message)}"
+        return "$CMD_CONNECT ${json.encodeToString(message)}"
     }
     
     fun encodeConfigMessage(message: ConfigMessage): String {
@@ -84,7 +97,7 @@ object Protocol {
     }
     
     fun encodeActionMessage(message: ActionMessage): String {
-        return "$MSG_ACTION ${json.encodeToString(message)}"
+        return "$CMD_ACTION ${json.encodeToString(message)}"
     }
     
     fun encodeChatMessage(message: ChatMessage): String {
@@ -92,12 +105,12 @@ object Protocol {
     }
     
     fun encodeMapChangeMessage(message: MapChangeMessage): String {
-        return "$MSG_MAP ${json.encodeToString(message)}"
+        return "$CMD_MAP ${json.encodeToString(message)}"
     }
     
-    // Function to create player list message (specific to current format)
-    fun createPlayersListMessage(players: List<Pair<String, String>>): String {
-        val playerNames = players.map { it.second }.joinToString(",")
-        return "$MSG_PLAYERS $playerNames"
+    // Function to create player list message
+    fun createPlayersListMessage(players: List<PlayerSession>): String {
+        val playerInfos = players.map { PlayerInfo(it.id, it.name, it.color) }
+        return "$MSG_PLAYERS ${json.encodeToString(playerInfos)}"
     }
 } 

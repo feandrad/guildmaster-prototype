@@ -5,6 +5,9 @@ import java.net.InetSocketAddress
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
+import java.util.UUID
 
 /**
  * Manages all connected player sessions on the server.
@@ -31,25 +34,41 @@ class SessionManager {
     // Timeout for inactivity (30 seconds)
     private val sessionTimeoutMs = 30_000L
     
+    private val lock = ReentrantLock()
+    
     init {
         // Start task to clean up inactive sessions
         scheduler.scheduleAtFixedRate(this::cleanupInactiveSessions, 10, 10, TimeUnit.SECONDS)
     }
     
     /**
-     * Create a new session for a player.
+     * Creates a new player session.
      */
-    fun createSession(playerName: String, tcpAddress: InetSocketAddress): PlayerSession {
-        val session = PlayerSession(name = playerName, tcpAddress = tcpAddress)
+    fun createSession(playerName: String, playerColor: String): PlayerSession {
+        val id = generatePlayerId()
+        val session = PlayerSession(id, playerName)
         
-        sessions[session.id] = session
-        tcpAddressToSessionId[tcpAddress] = session.id
+        // Set player color if provided
+        if (playerColor.isNotBlank()) {
+            session.color = playerColor
+        }
+        
+        // Store the session
+        sessions[id] = session
         
         // Add the session to the default map
         addSessionToMap(session.id, session.currentMapId)
         
-        logger.info { "New session created: ${session.id} for player: ${session.name}" }
+        logger.info { "New session created: $id for player: $playerName" }
+        
         return session
+    }
+    
+    /**
+     * Generate a unique player ID
+     */
+    private fun generatePlayerId(): String {
+        return UUID.randomUUID().toString()
     }
     
     /**
@@ -118,7 +137,7 @@ class SessionManager {
     }
     
     /**
-     * Get a session by TCP address.
+     * Get a session by TCP address
      */
     fun getSessionByTcpAddress(address: InetSocketAddress): PlayerSession? {
         val sessionId = tcpAddressToSessionId[address] ?: return null
@@ -126,11 +145,18 @@ class SessionManager {
     }
     
     /**
-     * Get a session by UDP address.
+     * Get a session by UDP address
      */
     fun getSessionByUdpAddress(address: InetSocketAddress): PlayerSession? {
         val sessionId = udpAddressToSessionId[address] ?: return null
         return sessions[sessionId]
+    }
+    
+    /**
+     * Get a session by player ID
+     */
+    fun getSessionById(playerId: String): PlayerSession? {
+        return sessions[playerId]
     }
     
     /**
@@ -206,5 +232,14 @@ class SessionManager {
         tcpAddressToSessionId.clear()
         udpAddressToSessionId.clear()
         mapToSessions.clear()
+    }
+    
+    /**
+     * Associate a TCP address with a session ID.
+     */
+    fun associateTcpAddress(address: InetSocketAddress, sessionId: String) {
+        lock.withLock {
+            tcpAddressToSessionId[address] = sessionId
+        }
     }
 } 
