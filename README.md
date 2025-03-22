@@ -1,178 +1,128 @@
 # Guild Master
 
-Guild Master is a multiplayer game featuring a client-server architecture with real-time communication between players across a network.
+A multiplayer online game using a hybrid TCP/UDP protocol with a Kotlin server and C++ client using raylib.
 
 ## Project Structure
 
-### Server (Kotlin)
-The server is implemented in Kotlin using non-blocking I/O for handling multiple client connections efficiently.
+- `client/`: Client application written in C++ using raylib
+- `server/`: Server application written in Kotlin
+- `shared/`: Shared protocol documentation
 
-```
-server/
-├── src/main/kotlin/com/guildmaster/server/
-│   ├── Application.kt        # Main entry point
-│   ├── GameServer.kt         # Core server implementation
-│   ├── Session.kt            # Player session management
-│   ├── SessionManager.kt     # Session tracking and lifecycle
-│   ├── Protocol.kt           # Communication protocol definitions
-│   └── MessageHandler.kt     # Message processing logic
-├── build.gradle.kts          # Gradle build configuration
-└── ...
-```
+## Server (Kotlin)
 
-### Client (C++ with Raylib)
-The client is implemented in C++ using Raylib for graphics rendering.
+The server is responsible for:
+- Managing player sessions
+- Processing player actions
+- Synchronizing game state between clients
+- Handling player connections/disconnections
 
-```
-client/
-├── src/
-│   ├── main.cpp              # Main entry point
-│   ├── game.cpp              # Game implementation
-│   └── network.cpp           # Network client implementation
-├── include/
-│   ├── game.h                # Game definitions
-│   └── network.h             # Network client definitions
-├── CMakeLists.txt            # Build configuration
-└── ...
-```
+### Server Architecture
 
-## Communication Protocol
+- Uses a hybrid TCP/UDP protocol
+- TCP for reliable communication (connections, important messages)
+- UDP for real-time updates (position changes)
+- Maintains a session manager to track connected players
+- Implements automatic cleanup of inactive sessions
 
-Guild Master uses a hybrid protocol approach:
+### Running the Server
 
-### TCP (Reliable Communication)
-- Connection handshake
-- Player registration and authentication
-- Chat messages
-- Map changes
-- Important game state updates
-
-### UDP (Fast, Real-time Communication)
-- Position updates
-- Player actions
-- Non-critical, frequent updates
-
-### Message Format
-Messages follow a text-based protocol with JSON payloads:
-
-```
-COMMAND_TYPE json_payload
-```
-
-Example:
-```
-CONNECT {"name":"Player1"}
-POS {"x":100.5,"y":200.3}
-CHAT {"playerId":"123","text":"Hello everyone!"}
-```
-
-## Key Features
-
-- **Multi-player Support**: Connect multiple players across a network
-- **Real-time Communication**: Fast position updates and actions
-- **Map System**: Players can move between different maps
-- **Chat System**: In-game communication between players
-- **Session Management**: Player tracking and state persistence
-- **Colorful Avatars**: Players are assigned unique colors for identification
-
-## Building and Running
-
-### Server
-
-#### Prerequisites
-- JDK 11+
-- Gradle
-
-#### Build and Run
-Using the provided script:
 ```bash
+cd server
 ./run_server.sh
 ```
 
-The server script accepts optional parameters:
+You can customize the TCP and UDP ports:
 ```bash
-./run_server.sh -t <tcp_port> -u <udp_port>
+cd server
+./run_server.sh -t 9999 -u 9998
 ```
 
-Default ports:
-- TCP: 9999
-- UDP: 9998
+## Client (C++)
 
-### Client
+The client is responsible for:
+- Connecting to the server
+- Rendering the game world
+- Processing player input
+- Displaying other players
 
-#### Prerequisites
-- C++ compiler
-- CMake
-- Raylib
+### Client Architecture
 
-#### Build and Run
-Using the provided script:
+- Uses raylib for rendering
+- Implements the hybrid TCP/UDP protocol
+- Manages connection state and player data
+- Renders the local player and other connected players
+
+### Building and Running the Client
+
 ```bash
+cd client
 ./run_client.sh
 ```
 
-The client script accepts optional parameters:
-```bash
-./run_client.sh -s <server_address> -t <tcp_port> -u <udp_port>
-```
-
-Default settings:
-- Server: 127.0.0.1
-- TCP Port: 9999
-- UDP Port: 9998
-
-Manual build and run:
+You can customize the server address and ports:
 ```bash
 cd client
-mkdir build && cd build
+./run_client.sh -s 127.0.0.1 -t 9999 -u 9998
+```
+
+Or build manually:
+```bash
+cd client
+mkdir -p build
+cd build
 cmake ..
 make
 ./guildmaster_client
 ```
 
-## Game Controls
+## Communication Protocol
 
-- **WASD/Arrow Keys**: Move your character
-- **T**: Open chat input
-- **Enter**: Send chat message
-- **Escape**: Cancel chat input
+The client and server communicate using a text-based protocol with JSON payloads:
 
-## Architecture
+- `CONNECT`: Initial connection and player setup
+- `CONFIG`: Player configuration updates
+- `PLAYERS`: List of active players
+- `POS`: Player position updates
+- `CHAT`: In-game chat messages
+- `MAP`: Map change requests
 
-### Server Architecture
+For detailed protocol information, see `shared/protocol.md`.
 
-The server consists of several key components:
+## Game Features
 
-1. **GameServer**: Handles TCP and UDP connections, message routing
-2. **SessionManager**: Manages player sessions, maps, and position tracking
-3. **Protocol**: Defines message formats and serialization
-4. **MessageHandler**: Processes incoming messages and generates responses
-
-### Client Architecture
-
-The client implements:
-
-1. **Network Layer**: Manages TCP and UDP sockets for communication with both reliable and real-time messages
-2. **Rendering Engine**: Uses Raylib for graphics display
-3. **Input Handling**: Captures user input for movement and actions
-4. **Game Logic**: Processes game state and updates
+- Real-time multiplayer interaction
+- Player customization (name, color)
+- Chat functionality
+- Smooth movement with client-side prediction
 
 ## Development
 
-### Adding New Features
+### Prerequisites
 
-1. Define new message types in the Protocol
-2. Implement handlers on both server and client
-3. Add UI elements as needed
-4. Test with multiple clients
+#### Server
+- JDK 11+
+- Kotlin
+- Gradle
 
-### Protocol Extension
+#### Client
+- C++ compiler
+- CMake
+- raylib
 
-To add new message types:
-1. Add constants to Protocol.kt
-2. Create data classes for serialization
-3. Implement handlers in MessageHandler
-4. Add client-side support
+### Setting Up Development Environment
+
+#### macOS
+```bash
+# Server dependencies
+brew install kotlin gradle
+
+# Client dependencies
+brew install raylib cmake
+```
+
+#### Windows
+- Install JDK, Kotlin, and Gradle for the server
+- Install CMake, a C++ compiler (like Visual Studio), and raylib for the client
 
 ## License
 
