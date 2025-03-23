@@ -1,8 +1,8 @@
 package com.guildmaster.server.player
 
-import org.joml.Vector2f
 import kotlinx.serialization.Contextual
 import kotlinx.serialization.Serializable
+import org.joml.Vector2f
 import kotlin.random.Random
 
 /**
@@ -15,7 +15,7 @@ data class Player(
     var color: String,
     @Contextual
     var position: Vector2f = Vector2f(0f, 0f),
-    var currentMapId: String = "default"
+    var mapId: String = "default"
 ) {
     companion object {
         // Spawn area parameters
@@ -47,6 +47,6 @@ data class Player(
         "color" to color,
         "x" to position.x,
         "y" to position.y,
-        "map" to currentMapId
+        "map" to mapId
     )
 } 

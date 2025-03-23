@@ -1,13 +1,12 @@
 package com.guildmaster.server.config
 
+import com.guildmaster.server.Logger
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import mu.KotlinLogging
 import java.io.File
-import java.util.UUID
+import java.util.*
 
-private val logger = KotlinLogging.logger {}
 
 @Serializable
 data class SystemConfig(
@@ -21,6 +20,12 @@ data class SystemConfig(
 class SystemIdentity {
     private val configFile = File("system.json")
     private var config: SystemConfig = SystemConfig()
+
+    val id: String
+        get() = config.id
+
+    val name: String
+        get() = config.name
     
     /**
      * Load or generate the system identity configuration.
@@ -30,14 +35,14 @@ class SystemIdentity {
         try {
             if (configFile.exists()) {
                 config = Json.decodeFromString(configFile.readText())
-                logger.info { "Loaded system identity: $config" }
+                Logger.info { "Loaded system identity: $config" }
             } else {
                 config = SystemConfig()
                 saveConfig()
-                logger.info { "Generated new system identity: $config" }
+                Logger.info { "Generated new system identity: $config" }
             }
         } catch (e: Exception) {
-            logger.error(e) { "Failed to load system identity" }
+            Logger.error(e) { "Failed to load system identity" }
             config = SystemConfig()
             saveConfig()
         }
@@ -47,17 +52,7 @@ class SystemIdentity {
         try {
             configFile.writeText(Json.encodeToString(config))
         } catch (e: Exception) {
-            logger.error(e) { "Failed to save system identity" }
+            Logger.error(e) { "Failed to save system identity" }
         }
     }
-    
-    /**
-     * Get the system player ID.
-     */
-    fun getId(): String = config.id
-    
-    /**
-     * Get the system name.
-     */
-    fun getName(): String = config.name
 } 
