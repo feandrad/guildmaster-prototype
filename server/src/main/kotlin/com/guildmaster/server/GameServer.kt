@@ -1,11 +1,11 @@
 package com.guildmaster.server
 
-import com.guildmaster.server.broadcast.Broadcaster
 import com.guildmaster.server.cli.CommandHandler
-import com.guildmaster.server.gameplay.GameService
+import com.guildmaster.server.network.Broadcaster
 import com.guildmaster.server.network.TcpService
 import com.guildmaster.server.network.UdpService
 import com.guildmaster.server.session.SessionManager
+import com.guildmaster.server.world.GameService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
@@ -25,23 +25,12 @@ class GameServer(
         try {
             tcpService.start()
             udpService.start()
-            startHeartbeat()
             commandHandler.start()
             Logger.info { "Server started on TCP port $tcpPort and UDP port $udpPort" }
         } catch (e: Exception) {
             Logger.error(e) { "Failed to start server" }
             stop()
         }
-    }
-
-    private fun startHeartbeat() {
-        executor.scheduleAtFixedRate({
-            try {
-                broadcaster.broadcastSystemMessage("heartbeat")
-            } catch (e: Exception) {
-                Logger.error(e) { "Failed to send heartbeat" }
-            }
-        }, 0, 30, TimeUnit.SECONDS)
     }
 
     fun stop() {

@@ -2,11 +2,11 @@ package com.guildmaster.server.cli
 
 import com.guildmaster.server.GameServer
 import com.guildmaster.server.Logger
-import com.guildmaster.server.broadcast.Broadcaster
 import com.guildmaster.server.cli.commands.ChatCommand
 import com.guildmaster.server.cli.commands.ExitCommand
 import com.guildmaster.server.cli.commands.HelpCommand
 import com.guildmaster.server.cli.commands.PlayersCommand
+import com.guildmaster.server.network.Broadcaster
 import com.guildmaster.server.session.Response
 import com.guildmaster.server.session.SessionManager
 

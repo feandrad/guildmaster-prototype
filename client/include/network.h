@@ -10,6 +10,9 @@
 #include <functional>
 #include <memory>
 #include <chrono>
+#include <sstream>
+#include <iomanip>
+#include <random>
 #include <nlohmann/json_fwd.hpp>
 
 // Platform-specific socket definitions

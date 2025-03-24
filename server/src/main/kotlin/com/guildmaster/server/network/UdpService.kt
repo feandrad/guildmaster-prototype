@@ -1,7 +1,6 @@
 package com.guildmaster.server.network
 
 import com.guildmaster.server.Logger
-import com.guildmaster.server.broadcast.Broadcaster
 import com.guildmaster.server.session.Response
 import com.guildmaster.server.session.SessionManager
 import java.net.InetSocketAddress
@@ -79,15 +78,15 @@ class UdpService(
                 message.substring(Protocol.CMD_POS.length).trim()
             )
 
-            when (val sessionResult = sessionManager.getSessionByUdpAddress(sender)) {
+            when (val sessionResult = sessionManager.getSessionByToken(data.token)) {
                 is Response.Success -> {
                     val session = sessionResult.data
                     sessionManager.updateMap(session.player.id, data.mapId)
-                    broadcaster.broadcastPositionUpdate(session.player.id, data.position, data.mapId)
+                    broadcaster.broadcastPositionUpdate(session.player.id, data.position, data.mapId, session.token)
                 }
 
                 is Response.Error -> {
-                    Logger.warn { "Session not found for UDP address $sender: ${sessionResult.message}" }
+                    Logger.warn { "Invalid token for position update from $sender: ${sessionResult.message}" }
                 }
             }
         } catch (e: Exception) {
@@ -101,14 +100,14 @@ class UdpService(
                 message.substring(Protocol.CMD_ACTION.length).trim()
             )
 
-            when (val sessionResult = sessionManager.getSessionByUdpAddress(sender)) {
+            when (val sessionResult = sessionManager.getSessionByToken(data.token)) {
                 is Response.Success -> {
                     val session = sessionResult.data
-                    broadcaster.broadcastAction(session.player.id, data.action, data.data)
+                    broadcaster.broadcastAction(session.player.id, data.action, data.data, session.token)
                 }
 
                 is Response.Error -> {
-                    Logger.warn { "Session not found for UDP address $sender: ${sessionResult.message}" }
+                    Logger.warn { "Invalid token for action from $sender: ${sessionResult.message}" }
                 }
             }
         } catch (e: Exception) {
@@ -122,14 +121,23 @@ class UdpService(
                 message.substring(Protocol.CMD_UDP_REGISTER.length).trim()
             )
 
-            when (val result = sessionManager.updateUdpAddress(data.id, sender)) {
+            when (val sessionResult = sessionManager.getSessionByToken(data.token)) {
                 is Response.Success -> {
-                    Logger.info { "UDP address registered for session ${data.id}" }
-                    sendPacket(sender, "${Protocol.MSG_UDP_REG}\n")
+                    val session = sessionResult.data
+                    when (val result = sessionManager.updateUdpAddress(session.player.id, sender)) {
+                        is Response.Success -> {
+                            Logger.info { "UDP address registered for session ${session.player.id}" }
+                            sendPacket(sender, "${Protocol.MSG_UDP_REG}\n")
+                        }
+
+                        is Response.Error -> {
+                            Logger.warn { "Failed to register UDP address: ${result.message}" }
+                        }
+                    }
                 }
 
                 is Response.Error -> {
-                    Logger.warn { "Failed to register UDP address: ${result.message}" }
+                    Logger.warn { "Invalid token for UDP registration from $sender: ${sessionResult.message}" }
                 }
             }
         } catch (e: Exception) {

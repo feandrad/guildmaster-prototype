@@ -1,4 +1,4 @@
-package com.guildmaster.server.gameplay
+package com.guildmaster.server.world
 
 import com.guildmaster.server.GameServer
 import com.guildmaster.server.Logger

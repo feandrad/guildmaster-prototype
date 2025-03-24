@@ -1,10 +1,10 @@
 package com.guildmaster.server.cli.commands
 
 import com.guildmaster.server.Logger
-import com.guildmaster.server.broadcast.Broadcaster
 import com.guildmaster.server.cli.CommandContext
 import com.guildmaster.server.cli.CommandNode
 import com.guildmaster.server.cli.CommandSource
+import com.guildmaster.server.network.Broadcaster
 import com.guildmaster.server.session.Response
 
 class ChatCommand(

@@ -1,7 +1,7 @@
 package com.guildmaster.server.session
 
 import com.guildmaster.server.Logger
-import com.guildmaster.server.player.Player
+import com.guildmaster.server.world.player.Player
 import org.joml.Vector2f
 import java.net.InetSocketAddress
 import java.util.*
@@ -20,6 +20,7 @@ class SessionManager {
     private val tcpAddressToSessionId = ConcurrentHashMap<InetSocketAddress, String>()
     private val udpAddressToSessionId = ConcurrentHashMap<InetSocketAddress, String>()
     private val mapToSessions = ConcurrentHashMap<String, MutableSet<String>>()
+    private val tokenToSessionId = ConcurrentHashMap<String, String>()
     private val lock = ReentrantLock()
     private val scheduler = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "session-cleanup-thread").apply { isDaemon = true }
@@ -29,35 +30,24 @@ class SessionManager {
         startInactivityMonitor()
     }
 
-    fun createSession(player: Player, tcpAddress: InetSocketAddress): Response<PlayerSession> {
-        return try {
-            val session = PlayerSession(player, tcpAddress)
-            sessions[player.id] = session
-            tcpAddressToSessionId[tcpAddress] = player.id
-            addSessionToMap(player.id, player.mapId)
-            Response.Success(session)
-        } catch (e: Exception) {
-            Logger.error(e) { "Failed to create session for player ${player.id}" }
-            Response.Error("Failed to create session: ${e.message}")
-        }
-    }
-
-    fun createSession(name: String, color: String): Response<PlayerSession> {
+    fun createSession(user: String, color: String, tcpAddress: InetSocketAddress): Response<PlayerSession> {
         return try {
             val playerId = UUID.randomUUID().toString()
             val player = Player(
                 id = playerId,
-                name = name,
+                name = user,
                 color = color,
                 position = Vector2f(0f, 0f),
                 mapId = "default"
             )
-            val session = PlayerSession(player, null)
-            sessions[playerId] = session
-            addSessionToMap(playerId, "default")
+            val session = PlayerSession(player, tcpAddress)
+            sessions[player.id] = session
+            tcpAddressToSessionId[tcpAddress] = player.id
+            tokenToSessionId[session.token] = player.id
+            addSessionToMap(player.id, player.mapId)
             Response.Success(session)
         } catch (e: Exception) {
-            Logger.error(e) { "Failed to create session from name=$name color=$color" }
+            Logger.error(e) { "Failed to create session for user $user" }
             Response.Error("Failed to create session: ${e.message}")
         }
     }
@@ -181,6 +171,17 @@ class SessionManager {
         }
     }
 
+    fun getSessionByToken(token: String): Response<PlayerSession> {
+        return tokenToSessionId[token]?.let { playerId ->
+            sessions[playerId]?.let { Response.Success(it) }
+                ?: Response.Error("Session not found for token")
+        } ?: Response.Error("Invalid token")
+    }
+
+    fun validateToken(token: String): Boolean {
+        return tokenToSessionId.containsKey(token)
+    }
+
     private fun addSessionToMap(targetSessionId: String, targetMapId: String) {
         mapToSessions.computeIfAbsent(targetMapId) { mutableSetOf() }.add(targetSessionId)
     }
@@ -196,6 +197,7 @@ class SessionManager {
         removeSessionFromMap(session.player.id, session.player.mapId)
         session.tcpAddress?.let { tcpAddressToSessionId.remove(it) }
         session.udpAddress?.let { udpAddressToSessionId.remove(it) }
+        tokenToSessionId.remove(session.token)
     }
 
     private fun startInactivityMonitor() {

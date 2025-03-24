@@ -53,8 +53,8 @@ class TcpClientHandler(
             
             try {
                 when {
-                    line.startsWith(Protocol.CMD_LOGIN) -> handleLogin(line)
-                    line.startsWith(Protocol.CMD_UDP_REGISTER) -> handleUdpRegistration(line)
+                    line.startsWith(Protocol.CMD_CONNECT) -> handleLogin(line)
+                    line.startsWith(Protocol.CMD_PING) -> heartbeat(line)
                     else -> handleCommand(line)
                 }
             } catch (e: Exception) {
@@ -66,18 +66,12 @@ class TcpClientHandler(
 
     private fun handleLogin(message: String) {
         try {
-            val jsonPart = message.substring(Protocol.CMD_LOGIN.length).trim()
-            val data = Protocol.json.decodeFromString<Protocol.LoginMessage>(jsonPart)
+            val jsonPart = message.substring(Protocol.CMD_CONNECT.length).trim()
+            val data = Protocol.json.decodeFromString<Protocol.ConnectMessage>(jsonPart)
 
-            // Use createSession(player, tcpAddress) so it matches SessionManager signature
-            when (val result = sessionManager.createSession(data.player, clientAddress)) {
-                is Response.Success -> {
-                    session = result.data
-                    sendMessage("${Protocol.MSG_LOGIN_SUCCESS}\n")
-                }
-                is Response.Error -> {
-                    sendMessage("ERROR ${result.message}")
-                }
+            when (val result = sessionManager.createSession(data.user, data.color, clientAddress)) {
+                is Response.Success -> sendMessage(Protocol.connectMessage(result.data))
+                is Response.Error -> sendMessage("ERROR ${result.message}")
             }
         } catch (e: SerializationException) {
             Logger.warn(e) { "Invalid login JSON received: $message" }
@@ -87,25 +81,9 @@ class TcpClientHandler(
             sendMessage("ERROR Failed to process login")
         }
     }
+    
+    private fun heartbeat(line: String) {
 
-    private fun handleUdpRegistration(message: String) {
-        try {
-            val data = Protocol.json.decodeFromString<Protocol.UdpRegisterMessage>(
-                message.substring(Protocol.CMD_UDP_REGISTER.length).trim()
-            )
-            
-            when (val result = sessionManager.updateUdpAddress(data.id, clientAddress)) {
-                is Response.Success -> {
-                    sendMessage("${Protocol.MSG_UDP_REG}\n")
-                }
-                is Response.Error -> {
-                    sendMessage("ERROR ${result.message}")
-                }
-            }
-        } catch (e: Exception) {
-            Logger.error(e) { "Error handling UDP registration" }
-            sendMessage("ERROR Failed to process UDP registration")
-        }
     }
     
     private fun handleCommand(command: String) {

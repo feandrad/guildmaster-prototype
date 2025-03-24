@@ -1,11 +1,9 @@
-package com.guildmaster.server.broadcast
+package com.guildmaster.server.network
 
 import com.guildmaster.server.Logger
-import com.guildmaster.server.network.Protocol
-import com.guildmaster.server.network.TcpService
-import com.guildmaster.server.player.Player
 import com.guildmaster.server.session.Response
 import com.guildmaster.server.session.SessionManager
+import com.guildmaster.server.world.player.Player
 import org.joml.Vector2f
 
 
@@ -49,33 +47,17 @@ class Broadcaster(
         }
     }
 
-    fun broadcastPositionUpdate(playerId: String, position: Vector2f, mapId: String) {
+    fun broadcastPositionUpdate(playerId: String, position: Vector2f, mapId: String, token: String) {
         sessionManager.getSessionByPlayerId(playerId).let { result ->
             when (result) {
                 is Response.Success -> {
                     val session = result.data
-                    val message = Protocol.createPositionUpdateMessage(playerId, position, mapId)
+                    val message = Protocol.positionUpdateMessage(playerId, position, mapId, token)
                     broadcastToPlayer(session.player, message)
                 }
 
                 is Response.Error -> {
                     Logger.warn { "Failed to broadcast position update: ${result.message}" }
-                }
-            }
-        }
-    }
-
-    fun broadcastAction(playerId: String, action: String, data: Map<String, String> = emptyMap()) {
-        sessionManager.getSessionByPlayerId(playerId).let { result ->
-            when (result) {
-                is Response.Success -> {
-                    val session = result.data
-                    val message = Protocol.createActionMessage(playerId, action, data)
-                    broadcastToPlayer(session.player, message)
-                }
-
-                is Response.Error -> {
-                    Logger.warn { "Failed to broadcast action: ${result.message}" }
                 }
             }
         }
@@ -97,16 +79,12 @@ class Broadcaster(
         }
     }
 
-    fun broadcastSystemMessage(message: String) {
-        broadcastToAll(Protocol.createSystemMessage(message))
-    }
-
     fun broadcastPlayersList(mapId: String) {
         sessionManager.getSessionsInMap(mapId).let { result ->
             when (result) {
                 is Response.Success -> {
                     val players = result.data.map { it.player }
-                    val message = Protocol.createPlayersListMessage(players)
+                    val message = Protocol.playersListMessage(players)
                     broadcastToMap(mapId, message)
                 }
 

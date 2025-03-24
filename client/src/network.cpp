@@ -5,6 +5,7 @@
 #include <cstring>
 #include <chrono>
 #include <iomanip>
+#include <random>
 #include <nlohmann/json.hpp>
 #include <thread>
 
@@ -443,452 +444,79 @@ void NetworkClient::checkUdpMessages() {
 
 // Process message from server
 void NetworkClient::processServerMessage(const std::string& message) {
-    DEBUG_LOG("Received: " << message);
+    // Debug log the received message
+    DEBUG_LOG("Received message: " + message);
     
-    // Check if the message starts with a command prefix
-    size_t spacePos = message.find_first_of(' ');
-    if (spacePos != std::string::npos) {
-        std::string command = message.substr(0, spacePos);
-        std::string payload = message.substr(spacePos + 1);
-        
-        DEBUG_LOG("Processing command: " << command << " with payload: " << payload);
-        
-        try {
-            // Parse payload as JSON
-            nlohmann::json data = nlohmann::json::parse(payload);
-            
-            if (command == "CONFIG") {
-                // Configuration message
-                if (data.contains("id") && data.contains("color")) {
-                    playerId = data["id"];
-                    playerColor = data["color"];
-                    DEBUG_LOG("Received CONFIG message. Player ID: " << playerId << ", Color: " << playerColor);
-                    
-                    // Register UDP address
-                    DEBUG_LOG("Sending UDP registration");
-                    sendUdpRegistration();
-                    
-                    // Send a position update to get a position assigned
-                    DEBUG_LOG("Sending initial position request");
-                    sendPositionUpdate(0, 0); // Use 0,0 to let server assign position
-                }
-            } 
-            else if (command == "PLAYERS") {
-                // Player list update
-                if (data.is_array()) {
-                    std::vector<PlayerInfo> newPlayers;
-                    
-                    DEBUG_LOG("Processing PLAYERS update with " << data.size() << " players");
-                    
-                    for (const auto& player : data) {
-                        if (player.contains("id") && player.contains("name") && player.contains("color")) {
-                            PlayerInfo info;
-                            info.id = player["id"];
-                            info.name = player["name"];
-                            info.color = player["color"];
-                            
-                            if (player.contains("x") && player.contains("y")) {
-                                info.x = player["x"];
-                                info.y = player["y"];
-                                DEBUG_LOG("Player " << info.name << " (" << info.id << ") at position (" 
-                                         << info.x << "," << info.y << ")");
-                            }
-                            
-                            if (player.contains("mapId")) {
-                                info.mapId = player["mapId"];
-                            } else {
-                                info.mapId = "default";
-                            }
-                            
-                            newPlayers.push_back(info);
-                        }
-                    }
-                    
-                    players = newPlayers;
-                    
-                    // Call the registered callback if available
-                    if (playerListCallback) {
-                        DEBUG_LOG("Calling player list callback with " << players.size() << " players");
-                        playerListCallback(players);
-                    }
-                    
-                    // Check all players and call position callback if we have some with positions
-                    for (const auto& player : players) {
-                        if (positionCallback) {
-                            DEBUG_LOG("Calling position callback for player " << player.id);
-                            positionCallback(player.id, player.x, player.y);
-                        }
-                    }
-                    
-                    DEBUG_LOG("Updated player list: " << players.size() << " players");
-                }
-            } 
-            else if (command == "POSITION") {
-                // Position update
-                if (data.contains("id") && data.contains("x") && data.contains("y")) {
-                    std::string id = data["id"];
-                    float x = data["x"];
-                    float y = data["y"];
-                    
-                    DEBUG_LOG("Position update for player " << id << ": (" << x << ", " << y << ")");
-                    
-                    // Update player position in the list
-                    for (auto& player : players) {
-                        if (player.id == id) {
-                            player.x = x;
-                            player.y = y;
-                            break;
-                        }
-                    }
-                    
-                    // Call the position callback if available
-                    if (positionCallback) {
-                        DEBUG_LOG("Calling position callback for " << id);
-                        positionCallback(id, x, y);
-                    }
-                }
-            }
-            else if (command == "CHAT") {
-                // Chat message
-                if (data.contains("sender") && data.contains("message")) {
-                    std::string sender = data["sender"];
-                    std::string chatMsg = data["message"];
-                    std::string fullMessage = sender + ": " + chatMsg;
-                    chatMessages.push_back(fullMessage);
-                    DEBUG_LOG("Chat message: " << fullMessage);
-                }
-            }
-            else if (command == "PONG") {
-                // Pong response, no action needed
-                DEBUG_LOG("Received PONG from server");
-            }
-            else if (command == "ERROR") {
-                // Error message
-                if (data.contains("message")) {
-                    std::string errorMsg = data["message"];
-                    DEBUG_LOG("Server error: " << errorMsg);
-                    statusMessage = "Server error: " + errorMsg;
-                }
-            }
-            else if (command == "UDP_REGISTERED") {
-                // UDP registration confirmation
-                DEBUG_LOG("UDP registration confirmed by server");
-                udpRegistered = true;
-            }
-            else if (command == "GAME_STATE") {
-                // Full game state update - similar to PLAYERS but might have additional fields
-                DEBUG_LOG("Received GAME_STATE update");
-                if (data.contains("players") && data["players"].is_array()) {
-                    std::vector<PlayerInfo> newPlayers;
-                    
-                    for (const auto& player : data["players"]) {
-                        if (player.contains("id") && player.contains("name")) {
-                            PlayerInfo info;
-                            info.id = player["id"];
-                            info.name = player["name"];
-                            
-                            if (player.contains("color")) {
-                                info.color = player["color"];
-                            } else {
-                                info.color = "#FF0000"; // Default red
-                            }
-                            
-                            if (player.contains("x") && player.contains("y")) {
-                                info.x = player["x"];
-                                info.y = player["y"];
-                            }
-                            
-                            if (player.contains("mapId")) {
-                                info.mapId = player["mapId"];
-                            } else {
-                                info.mapId = "default";
-                            }
-                            
-                            newPlayers.push_back(info);
-                        }
-                    }
-                    
-                    players = newPlayers;
-                    
-                    // Call the registered callback if available
-                    if (playerListCallback) {
-                        playerListCallback(players);
-                    }
-                    
-                    // Call position callback for each player to ensure UI is updated
-                    for (const auto& player : players) {
-                        if (positionCallback) {
-                            positionCallback(player.id, player.x, player.y);
-                        }
-                    }
-                }
-            }
-            return; // Successfully processed command with JSON payload
-        } catch (const std::exception& e) {
-            DEBUG_LOG("Failed to parse payload as JSON: " << e.what());
-            
-            // Handle special case for PONG without payload
-            if (command == "PONG") {
-                DEBUG_LOG("Received PONG from server (legacy)");
-                return;
-            }
-        }
+    // Check for login success message
+    if (message == "MSG_LOGIN_SUCCESS") {
+        // Login was successful
+        DEBUG_LOG("Login successful for player: " + pendingConnectName);
+        return;
     }
     
-    // If we get here, try to process as legacy format without command prefix
+    // Existing message processing logic
     try {
-        // Parse message as JSON
-        nlohmann::json data = nlohmann::json::parse(message);
+        // Parse the message as JSON if it's a complex message
+        nlohmann::json jsonMessage = nlohmann::json::parse(message);
         
-        // Process different message types
-        if (data.contains("type")) {
-            std::string type = data["type"];
+        // Handle different types of messages based on their structure
+        if (jsonMessage.contains("type")) {
+            std::string messageType = jsonMessage["type"];
             
-            if (type == "CONFIG") {
-                // Configuration message
-                if (data.contains("id") && data.contains("color")) {
-                    playerId = data["id"];
-                    playerColor = data["color"];
-                    DEBUG_LOG("Received CONFIG message (JSON). Player ID: " << playerId << ", Color: " << playerColor);
-                    
-                    // Register UDP address
-                    DEBUG_LOG("Sending UDP_REGISTER");
-                    sendUdpRegistration();
-                    
-                    // Send a position update to get a position assigned
-                    DEBUG_LOG("Sending initial position request");
-                    sendPositionUpdate(0, 0); // Use 0,0 to let server assign position
+            // Handle player list updates
+            if (messageType == "PLAYER_LIST") {
+                players.clear();
+                for (const auto& playerData : jsonMessage["players"]) {
+                    PlayerInfo player;
+                    player.id = playerData["id"];
+                    player.name = playerData["name"];
+                    player.color = playerData["color"];
+                    player.x = playerData.value("x", 0.0f);
+                    player.y = playerData.value("y", 0.0f);
+                    player.mapId = playerData.value("mapId", "default");
+                    players.push_back(player);
                 }
-            } 
-            else if (type == "CHAT") {
-                // Chat message
-                if (data.contains("sender") && data.contains("message")) {
-                    std::string sender = data["sender"];
-                    std::string chatMsg = data["message"];
-                    std::string fullMessage = sender + ": " + chatMsg;
-                    chatMessages.push_back(fullMessage);
-                    DEBUG_LOG("Chat message: " << fullMessage);
-                }
-            } 
-            else if (type == "PLAYERS") {
-                // Player list update
-                if (data.contains("players") && data["players"].is_array()) {
-                    std::vector<PlayerInfo> newPlayers;
-                    
-                    DEBUG_LOG("Processing PLAYERS update with " << data["players"].size() << " players");
-                    
-                    for (const auto& player : data["players"]) {
-                        if (player.contains("id") && player.contains("name") && player.contains("color")) {
-                            PlayerInfo info;
-                            info.id = player["id"];
-                            info.name = player["name"];
-                            info.color = player["color"];
-                            
-                            if (player.contains("x") && player.contains("y")) {
-                                info.x = player["x"];
-                                info.y = player["y"];
-                                DEBUG_LOG("Player " << info.name << " (" << info.id << ") at position (" 
-                                         << info.x << "," << info.y << ")");
-                            }
-                            
-                            if (player.contains("mapId")) {
-                                info.mapId = player["mapId"];
-                            } else {
-                                info.mapId = "default";
-                            }
-                            
-                            newPlayers.push_back(info);
-                        }
-                    }
-                    
-                    players = newPlayers;
-                    
-                    // Call the registered callback if available
-                    if (playerListCallback) {
-                        DEBUG_LOG("Calling player list callback with " << players.size() << " players");
-                        playerListCallback(players);
-                    }
-                    
-                    // Check all players and call position callback if we have some with positions
-                    for (const auto& player : players) {
-                        if (positionCallback) {
-                            DEBUG_LOG("Calling position callback for player " << player.id);
-                            positionCallback(player.id, player.x, player.y);
-                        }
-                    }
-                    
-                    DEBUG_LOG("Updated player list: " << players.size() << " players");
-                }
-            } 
-            else if (type == "POSITION") {
-                // Position update
-                if (data.contains("id") && data.contains("x") && data.contains("y")) {
-                    std::string id = data["id"];
-                    float x = data["x"];
-                    float y = data["y"];
-                    
-                    DEBUG_LOG("Position update for player " << id << ": (" << x << ", " << y << ")");
-                    
-                    // Update player position in the list
-                    for (auto& player : players) {
-                        if (player.id == id) {
-                            player.x = x;
-                            player.y = y;
-                            break;
-                        }
-                    }
-                    
-                    // Call the position callback if available
-                    if (positionCallback) {
-                        DEBUG_LOG("Calling position callback for " << id);
-                        positionCallback(id, x, y);
-                    }
+                
+                // Invoke player list callback if set
+                if (playerListCallback) {
+                    playerListCallback(players);
                 }
             }
-            else if (type == "PONG") {
-                // Pong response, no action needed
-                DEBUG_LOG("Received PONG from server");
-            }
+            // Add more message type handlers as needed
         }
+    } catch (const nlohmann::json::exception& e) {
+        // Handle JSON parsing errors
+        DEBUG_LOG("JSON parsing error: " + std::string(e.what()));
     } catch (const std::exception& e) {
-        // Legacy string-based message parsing for backward compatibility
-        if (message.substr(0, 7) == "CONFIG:") {
-            std::istringstream iss(message.substr(7));
-            std::string id, color;
-            
-            if (std::getline(iss, id, ':') && std::getline(iss, color)) {
-                playerId = id;
-                playerColor = color;
-                DEBUG_LOG("Received CONFIG message (legacy). Player ID: " << playerId << ", Color: " << playerColor);
-                
-                // Register UDP address
-                DEBUG_LOG("Sending UDP registration");
-                sendUdpRegistration();
-                
-                // Request initial position
-                DEBUG_LOG("Sending initial position request");
-                sendPositionUpdate(0, 0);
-            }
-        } 
-        else if (message.substr(0, 5) == "CHAT:") {
-            std::string chatMessage = message.substr(5);
-            chatMessages.push_back(chatMessage);
-            DEBUG_LOG("Chat message (legacy): " << chatMessage);
-        } 
-        else if (message.substr(0, 8) == "PLAYERS:") {
-            std::istringstream iss(message.substr(8));
-            std::string playerData;
-            std::vector<PlayerInfo> newPlayers;
-            
-            DEBUG_LOG("Processing legacy PLAYERS update");
-            
-            while (std::getline(iss, playerData, '|')) {
-                std::istringstream playerIss(playerData);
-                std::string id, name, color, xStr, yStr;
-                
-                if (std::getline(playerIss, id, ':') && 
-                    std::getline(playerIss, name, ':') && 
-                    std::getline(playerIss, color, ':') &&
-                    std::getline(playerIss, xStr, ':') &&
-                    std::getline(playerIss, yStr)) {
-                    
-                    PlayerInfo info;
-                    info.id = id;
-                    info.name = name;
-                    info.color = color;
-                    info.x = std::stof(xStr);
-                    info.y = std::stof(yStr);
-                    info.mapId = "default";
-                    
-                    DEBUG_LOG("Legacy player data: " << id << ", " << name << " at (" << info.x << "," << info.y << ")");
-                    
-                    newPlayers.push_back(info);
-                }
-            }
-            
-            players = newPlayers;
-            
-            // Call the registered callback if available
-            if (playerListCallback) {
-                DEBUG_LOG("Calling player list callback (legacy) with " << players.size() << " players");
-                playerListCallback(players);
-            }
-            
-            // Call position callback for each player
-            for (const auto& player : players) {
-                if (positionCallback) {
-                    DEBUG_LOG("Calling position callback (legacy) for player " << player.id);
-                    positionCallback(player.id, player.x, player.y);
-                }
-            }
-            
-            DEBUG_LOG("Updated player list (legacy): " << players.size() << " players");
-        } 
-        else if (message.substr(0, 9) == "POSITION:") {
-            std::istringstream iss(message.substr(9));
-            std::string id, xStr, yStr;
-            
-            if (std::getline(iss, id, ':') && 
-                std::getline(iss, xStr, ':') && 
-                std::getline(iss, yStr)) {
-                
-                float x = std::stof(xStr);
-                float y = std::stof(yStr);
-                
-                DEBUG_LOG("Position update for player " << id << " (legacy): (" << x << ", " << y << ")");
-                
-                // Update player position in the list
-                for (auto& player : players) {
-                    if (player.id == id) {
-                        player.x = x;
-                        player.y = y;
-                        break;
-                    }
-                }
-                
-                // Call the position callback if available
-                if (positionCallback) {
-                    DEBUG_LOG("Calling position callback (legacy) for " << id);
-                    positionCallback(id, x, y);
-                }
-            }
-        }
-        else if (message == "PONG") {
-            // Pong response, no action needed
-            DEBUG_LOG("Received PONG from server (legacy)");
-        }
-        else if (message.substr(0, 14) == "UDP_REGISTERED") {
-            DEBUG_LOG("UDP registration confirmed by server (legacy)");
-            udpRegistered = true;
-        }
-        else {
-            DEBUG_LOG("Failed to parse message: " << e.what());
-            DEBUG_LOG("Original message: " << message);
-        }
+        // Handle other potential exceptions
+        DEBUG_LOG("Message processing error: " + std::string(e.what()));
     }
 }
 
 // Send connect request
 bool NetworkClient::sendConnectRequest(const std::string& playerName, const std::string& colorHex) {
-    if (status != ConnectionStatus::CONNECTED) {
-        std::cout << "Cannot send connect request: not connected (status: " 
-                  << static_cast<int>(status) << ")" << std::endl;
-        return false;
-    }
+    // Generate a unique player ID (UUID)
+    std::string playerId = generateUniqueId();
     
-    // Send connect request using JSON format that the server expects
-    nlohmann::json request = {
-        {"name", playerName},
-        {"color", colorHex}
+    // Prepare the login message in the expected JSON format
+    nlohmann::json loginJson = {
+        {"player", {
+            {"id", playerId},
+            {"name", playerName},
+            {"color", colorHex}
+        }}
     };
     
-    std::string requestStr = request.dump();
-    pendingConnectName = playerName;
+    // Convert JSON to string and prepend the LOGIN command
+    std::string loginMessage = "LOGIN " + loginJson.dump();
     
-    std::cout << "Sending connect request: " << requestStr << std::endl;
-    bool result = sendTcpMessage("CONNECT " + requestStr);
-    std::cout << "Connect request sent: " << (result ? "success" : "failed") << std::endl;
-    return result;
+    // Store player details for later use
+    this->playerId = playerId;
+    this->pendingConnectName = playerName;
+    this->playerColor = colorHex;
+    
+    // Send the login message via TCP
+    return sendTcpMessage(loginMessage);
 }
 
 // Send position update
@@ -990,4 +618,31 @@ bool NetworkClient::sendUdpRegistration() {
     }
     
     return result;
+}
+
+// Generate a unique player ID (UUID)
+std::string NetworkClient::generateUniqueId() {
+    // Use random device and Mersenne Twister engine for better randomness
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    
+    // Create a uniform distribution for hexadecimal digits
+    std::uniform_int_distribution<> dis(0, 15);
+    
+    // UUID format: 8-4-4-4-12 hexadecimal characters
+    std::stringstream uuid;
+    uuid << std::hex << std::setfill('0');
+    
+    // Generate each section of the UUID
+    for (int i = 0; i < 32; ++i) {
+        // Add hyphens at the standard positions
+        if (i == 8 || i == 12 || i == 16 || i == 20) {
+            uuid << '-';
+        }
+        
+        // Generate a random hexadecimal digit
+        uuid << dis(gen);
+    }
+    
+    return uuid.str();
 } 
