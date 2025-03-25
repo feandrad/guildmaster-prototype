@@ -68,6 +68,7 @@ void PlayerManager::updatePlayers(const std::vector<PlayerInfo>& playerInfos, co
                 localPlayer.serverX = playerInfo.x;
                 localPlayer.serverY = playerInfo.y;
                 localPlayer.initialPositionReceived = true;
+                localPlayer.mapId = playerInfo.mapId;
                 
                 DEBUG_LOG("Using server-provided position: (" << playerInfo.x << "," << playerInfo.y << ")");
             } else {

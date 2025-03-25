@@ -111,6 +111,10 @@ public:
     std::string playerColor;
     
 private:
+    static constexpr int CONNECTION_TIMEOUT_SECONDS = 16;
+    static constexpr int POST_CONNECTION_TIMEOUT_SECONDS = 900; // 15 minutes
+    static constexpr int PING_INTERVAL_SECONDS = 5;
+    
     // Socket management
     socket_t tcpSocket = -1;
     socket_t udpSocket = -1;
@@ -123,6 +127,7 @@ private:
     
     // Player data
     std::string playerId;
+    std::string token;
     std::vector<PlayerInfo> players;
     std::vector<std::string> chatMessages;
     
@@ -141,6 +146,7 @@ private:
     void checkUdpMessages();
     bool setSocketNonBlocking(socket_t socket);
     bool checkTcpConnectionStatus();
+    std::string generateUniqueId();
     
     // Connection state
     bool tcpConnectPending = false;

@@ -276,13 +276,23 @@ void NetworkClient::update() {
             
             // Create connect message with the pending name using JSON
             nlohmann::json request = {
-                {"name", name},
+                {"user", name},
                 {"color", playerColor.empty() ? "#FF0000" : playerColor}
             };
             
             std::string requestStr = request.dump();
-            DEBUG_LOG("Connection established, sending delayed connect request: CONNECT " << requestStr);
-            sendTcpMessage("CONNECT " + requestStr);
+            DEBUG_LOG("Connection established, sending connect request: CONNECT " << requestStr);
+            
+            // Send the connect request and wait for response
+            if (!sendTcpMessage("CONNECT " + requestStr)) {
+                DEBUG_LOG("Failed to send connect request");
+                disconnect();
+                status = ConnectionStatus::DISCONNECTED;
+                statusMessage = "Failed to send connect request";
+                return;
+            }
+            
+            DEBUG_LOG("Connect request sent, waiting for response...");
         }
     }
     
@@ -293,13 +303,17 @@ void NetworkClient::update() {
         
         // Check for connection timeout
         auto now = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - lastMessageTime).count();
+        auto timeSinceLastMessage = std::chrono::duration_cast<std::chrono::seconds>(
+            now - lastMessageTime).count();
         
-        if (elapsed > connectionTimeout) {
-            DEBUG_LOG("Connection timed out after " << elapsed << " seconds");
+        int timeoutSeconds = isConnected ? POST_CONNECTION_TIMEOUT_SECONDS : CONNECTION_TIMEOUT_SECONDS;
+        if (timeSinceLastMessage >= timeoutSeconds) {
+            DEBUG_LOG("Connection timed out after " << timeoutSeconds << " seconds");
+            DEBUG_LOG("Last message time: " << std::chrono::system_clock::to_time_t(
+                std::chrono::system_clock::now() - std::chrono::seconds(timeSinceLastMessage)));
+            DEBUG_LOG("Current time: " << std::chrono::system_clock::to_time_t(
+                std::chrono::system_clock::now()));
             disconnect();
-            status = ConnectionStatus::DISCONNECTED;
-            statusMessage = "Connection to server timed out";
             return;
         }
         
@@ -330,7 +344,7 @@ bool NetworkClient::sendTcpMessage(const std::string& message) {
         return false;
     }
     
-    DEBUG_LOG("Sent TCP: " << message);
+    DEBUG_LOG("Sent TCP message (" << result << " bytes): '" << message << "'");
     return true;
 }
 
@@ -369,8 +383,25 @@ void NetworkClient::checkTcpMessages() {
         // Process received data
         buffer[bytesReceived] = '\0';
         
+        // Check if the received data is blank or just whitespace
+        bool isBlank = true;
+        for (int i = 0; i < bytesReceived; i++) {
+            if (buffer[i] != ' ' && buffer[i] != '\t' && buffer[i] != '\n' && buffer[i] != '\r') {
+                isBlank = false;
+                break;
+            }
+        }
+        
+        if (isBlank) {
+            DEBUG_LOG("Received blank data (" << bytesReceived << " bytes)");
+            return;
+        }
+        
+        DEBUG_LOG("Raw TCP data received (" << bytesReceived << " bytes): '" << buffer << "'");
+        
         // Add to buffer
         tcpBuffer += buffer;
+        DEBUG_LOG("Current TCP buffer: '" << tcpBuffer << "'");
         
         // Process complete messages
         size_t pos;
@@ -380,6 +411,9 @@ void NetworkClient::checkTcpMessages() {
             
             // Process message
             if (!message.empty()) {
+                DEBUG_LOG("Processing complete message: '" << message << "'");
+                DEBUG_LOG("Message length: " << message.length());
+                DEBUG_LOG("First 8 chars: '" << message.substr(0, 8) << "'");
                 processServerMessage(message);
             }
         }
@@ -445,16 +479,58 @@ void NetworkClient::checkUdpMessages() {
 // Process message from server
 void NetworkClient::processServerMessage(const std::string& message) {
     // Debug log the received message
-    DEBUG_LOG("Received message: " + message);
+    DEBUG_LOG("Processing message: '" << message << "'");
+    DEBUG_LOG("Message length: " << message.length());
+    DEBUG_LOG("First 8 chars: '" << message.substr(0, 8) << "'");
     
-    // Check for login success message
-    if (message == "MSG_LOGIN_SUCCESS") {
-        // Login was successful
-        DEBUG_LOG("Login successful for player: " + pendingConnectName);
-        return;
+    // Check for CONNECT response
+    if (message.substr(0, 8) == "CONNECT ") {
+        std::string jsonStr = message.substr(8); // Skip "CONNECT " prefix
+        try {
+            DEBUG_LOG("Found CONNECT response, JSON part: '" << jsonStr << "'");
+            
+            nlohmann::json response = nlohmann::json::parse(jsonStr);
+            
+            if (response.contains("player") && response.contains("token")) {
+                const auto& playerData = response["player"];
+                playerId = playerData["id"];
+                playerColor = playerData["color"];
+                
+                DEBUG_LOG("Received player data - ID: " << playerId << ", Color: " << playerColor);
+                
+                // Update player position if provided
+                if (playerData.contains("position")) {
+                    const auto& pos = playerData["position"];
+                    float x = pos["x"];
+                    float y = pos["y"];
+                    
+                    DEBUG_LOG("Received initial position: (" << x << ", " << y << ")");
+                    
+                    // Update player position through callback if set
+                    if (positionCallback) {
+                        positionCallback(playerId, x, y);
+                    }
+                } else {
+                    DEBUG_LOG("No position data in CONNECT response");
+                }
+                
+                // Store the token for future use
+                token = response["token"];
+                
+                DEBUG_LOG("Successfully processed CONNECT response - ID: " << playerId << ", Token: " << token);
+                return;
+            } else {
+                DEBUG_LOG("CONNECT response missing required fields. Response: " << response.dump());
+            }
+        } catch (const nlohmann::json::exception& e) {
+            DEBUG_LOG("JSON parsing error in CONNECT response: " << std::string(e.what()));
+            DEBUG_LOG("Raw JSON string: '" << jsonStr << "'");
+        }
+    } else {
+        DEBUG_LOG("Message is not a CONNECT response. First 8 chars: '" << message.substr(0, 8) << "'");
     }
     
-    // Existing message processing logic
+    // Handle other message types
     try {
         // Parse the message as JSON if it's a complex message
         nlohmann::json jsonMessage = nlohmann::json::parse(message);
@@ -471,9 +547,9 @@ void NetworkClient::processServerMessage(const std::string& message) {
                     player.id = playerData["id"];
                     player.name = playerData["name"];
                     player.color = playerData["color"];
-                    player.x = playerData.value("x", 0.0f);
-                    player.y = playerData.value("y", 0.0f);
-                    player.mapId = playerData.value("mapId", "default");
+                    player.x = playerData["position"]["x"];
+                    player.y = playerData["position"]["y"];
+                    player.mapId = playerData["mapId"];
                     players.push_back(player);
                 }
                 
@@ -486,37 +562,30 @@ void NetworkClient::processServerMessage(const std::string& message) {
         }
     } catch (const nlohmann::json::exception& e) {
         // Handle JSON parsing errors
-        DEBUG_LOG("JSON parsing error: " + std::string(e.what()));
+        DEBUG_LOG("JSON parsing error: " << std::string(e.what()));
     } catch (const std::exception& e) {
         // Handle other potential exceptions
-        DEBUG_LOG("Message processing error: " + std::string(e.what()));
+        DEBUG_LOG("Message processing error: " << std::string(e.what()));
     }
 }
 
 // Send connect request
 bool NetworkClient::sendConnectRequest(const std::string& playerName, const std::string& colorHex) {
-    // Generate a unique player ID (UUID)
-    std::string playerId = generateUniqueId();
-    
-    // Prepare the login message in the expected JSON format
-    nlohmann::json loginJson = {
-        {"player", {
-            {"id", playerId},
-            {"name", playerName},
-            {"color", colorHex}
-        }}
+    // Prepare the connect message in the expected JSON format
+    nlohmann::json connectJson = {
+        {"user", playerName},
+        {"color", colorHex}
     };
     
-    // Convert JSON to string and prepend the LOGIN command
-    std::string loginMessage = "LOGIN " + loginJson.dump();
+    // Convert JSON to string and prepend the CONNECT command
+    std::string connectMessage = "CONNECT " + connectJson.dump();
     
     // Store player details for later use
-    this->playerId = playerId;
     this->pendingConnectName = playerName;
     this->playerColor = colorHex;
     
-    // Send the login message via TCP
-    return sendTcpMessage(loginMessage);
+    // Send the connect message via TCP
+    return sendTcpMessage(connectMessage);
 }
 
 // Send position update
@@ -532,9 +601,10 @@ bool NetworkClient::sendPositionUpdate(float x, float y) {
     
     // Send position update using JSON format
     nlohmann::json update = {
-        {"id", playerId},
-        {"x", std::stof(xStr.str())},
-        {"y", std::stof(yStr.str())}
+        {"position", {
+            {"x", std::stof(xStr.str())},
+            {"y", std::stof(yStr.str())}
+        }}
     };
     
     std::string updateStr = update.dump();

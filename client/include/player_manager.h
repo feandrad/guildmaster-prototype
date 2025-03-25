@@ -24,7 +24,6 @@ struct Player {
     // State
     bool isLocalPlayer = false;
     bool isActive = true;
-    bool initialPositionReceived = false;
     
     // Server position for correction
     float serverX = 400.0f;

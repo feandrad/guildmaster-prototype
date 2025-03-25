@@ -94,15 +94,32 @@ class TcpClientHandler(
         )
 //        commandHandler.executeCommand(context)
     }
-    
+
     fun sendMessage(message: String) {
         try {
-            channel.write(ByteBuffer.wrap(message.toByteArray()))
+            val formattedMessage = if (message.startsWith(Protocol.CMD_CONNECT)) {
+                formatConnectMessage(message)
+            } else {
+                message + "\n"
+            }
+            writeToChannel(formattedMessage)
         } catch (e: Exception) {
             Logger.error(e) { "Error sending message to client $clientAddress" }
         }
     }
-    
+
+    private fun formatConnectMessage(message: String): String {
+        val jsonPart = message.removePrefix(Protocol.CMD_CONNECT).trim()
+        val json = Protocol.json.parseToJsonElement(jsonPart)
+        val compactJson = json.toString()
+        return "${Protocol.CMD_CONNECT} $compactJson\n"
+    }
+
+    private fun writeToChannel(content: String) {
+        val bytes = content.toByteArray()
+        channel.write(ByteBuffer.wrap(bytes))
+    }
+
     private fun handleDisconnect() {
         isRunning = false
         session?.let { session ->
