@@ -31,6 +31,7 @@ class UdpService(
         } catch (e: Exception) {
             Logger.error(e) { "Failed to start UDP service" }
             stop()
+            throw e
         }
     }
 
@@ -65,7 +66,7 @@ class UdpService(
                 message.startsWith(Protocol.CMD_POS) -> handlePositionUpdate(sender, message)
 //                message.startsWith(Protocol.CMD_ACTION) -> handleActionPacket(sender, message)
                 message.startsWith(Protocol.CMD_PING) -> sendPacket(sender, "${Protocol.MSG_PONG}\n")
-                message.startsWith(Protocol.CMD_UDP_REGISTER) -> handleUdpRegistration(sender, message)
+//                message.startsWith(Protocol.CMD_UDP_REGISTER) -> handleUdpRegistration(sender, message)
             }
         } catch (e: Exception) {
             Logger.error(e) { "Error processing UDP packet from $sender" }
@@ -94,56 +95,35 @@ class UdpService(
         }
     }
 
-    private fun handleActionPacket(sender: InetSocketAddress, message: String) {
-        try {
-            val data = Protocol.json.decodeFromString<Protocol.ActionMessage>(
-                message.substring(Protocol.CMD_ACTION.length).trim()
-            )
-
-            when (val sessionResult = sessionManager.getSessionByToken(data.token)) {
-                is Response.Success -> {
-                    val session = sessionResult.data
-                    broadcaster.broadcastAction(session.player.id, data.action, data.data, session.token)
-                }
-
-                is Response.Error -> {
-                    Logger.warn { "Invalid token for action from $sender: ${sessionResult.message}" }
-                }
-            }
-        } catch (e: Exception) {
-            Logger.error(e) { "Error handling action packet from $sender" }
-        }
-    }
-
-    private fun handleUdpRegistration(sender: InetSocketAddress, message: String) {
-        try {
-            val data = Protocol.json.decodeFromString<Protocol.UdpRegisterMessage>(
-                message.substring(Protocol.CMD_UDP_REGISTER.length).trim()
-            )
-
-            when (val sessionResult = sessionManager.getSessionByToken(data.token)) {
-                is Response.Success -> {
-                    val session = sessionResult.data
-                    when (val result = sessionManager.updateUdpAddress(session.player.id, sender)) {
-                        is Response.Success -> {
-                            Logger.info { "UDP address registered for session ${session.player.id}" }
-                            sendPacket(sender, "${Protocol.MSG_UDP_REG}\n")
-                        }
-
-                        is Response.Error -> {
-                            Logger.warn { "Failed to register UDP address: ${result.message}" }
-                        }
-                    }
-                }
-
-                is Response.Error -> {
-                    Logger.warn { "Invalid token for UDP registration from $sender: ${sessionResult.message}" }
-                }
-            }
-        } catch (e: Exception) {
-            Logger.error(e) { "Error handling UDP registration from $sender" }
-        }
-    }
+//    private fun handleUdpRegistration(sender: InetSocketAddress, message: String) {
+//        try {
+//            val data = Protocol.json.decodeFromString<Protocol.UdpRegisterMessage>(
+//                message.substring(Protocol.CMD_UDP_REGISTER.length).trim()
+//            )
+//
+//            when (val sessionResult = sessionManager.getSessionByToken(data.token)) {
+//                is Response.Success -> {
+//                    val session = sessionResult.data
+//                    when (val result = sessionManager.updateUdpAddress(session.player.id, sender)) {
+//                        is Response.Success -> {
+//                            Logger.info { "UDP address registered for session ${session.player.id}" }
+//                            sendPacket(sender, "${Protocol.MSG_UDP_REG}\n")
+//                        }
+//
+//                        is Response.Error -> {
+//                            Logger.warn { "Failed to register UDP address: ${result.message}" }
+//                        }
+//                    }
+//                }
+//
+//                is Response.Error -> {
+//                    Logger.warn { "Invalid token for UDP registration from $sender: ${sessionResult.message}" }
+//                }
+//            }
+//        } catch (e: Exception) {
+//            Logger.error(e) { "Error handling UDP registration from $sender" }
+//        }
+//    }
 
     fun sendPacket(target: InetSocketAddress, message: String) {
         try {

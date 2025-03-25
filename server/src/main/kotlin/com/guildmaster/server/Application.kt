@@ -1,9 +1,10 @@
 package com.guildmaster.server
 
 import mu.KotlinLogging
+import java.net.BindException
 import kotlin.concurrent.thread
 
- val Logger = KotlinLogging.logger {}
+val Logger = KotlinLogging.logger {}
 
 private const val DEFAULT_TCP_PORT = 9999
 private const val DEFAULT_UDP_PORT = 9998
@@ -22,7 +23,16 @@ fun main(args: Array<String>) {
     Logger.info { "Using UDP port: $udpPort" }
     
     val server = GameServer(tcpPort, udpPort)
-    server.start()
+    
+    try {
+        server.start()
+    } catch (e: BindException) {
+        Logger.error { "Failed to start server: ${e.message}" }
+        System.exit(1)
+    } catch (e: Exception) {
+        Logger.error(e) { "Failed to start server" }
+        System.exit(1)
+    }
     
     Runtime.getRuntime().addShutdownHook(thread(start = false) {
         Logger.info { "Shutting down server..." }

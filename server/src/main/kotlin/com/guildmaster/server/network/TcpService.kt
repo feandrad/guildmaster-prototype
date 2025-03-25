@@ -35,6 +35,7 @@ class TcpService(
         } catch (e: Exception) {
             Logger.error(e) { "Failed to start TCP service" }
             stop()
+            throw e
         }
     }
 
